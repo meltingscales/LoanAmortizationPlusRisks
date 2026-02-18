@@ -630,9 +630,11 @@ impl eframe::App for LoanCalcGui {
                     }
 
                     if let Some(texture) = &self.chart_texture {
-                        // Show chart in scrollable area
+                        // Show chart in scrollable area - fill whatever height is left
+                        let available_h = ui.available_height();
                         egui::ScrollArea::both()
                             .auto_shrink([false; 2])
+                            .min_scrolled_height(available_h)
                             .show(ui, |ui| {
                                 ui.image((texture.id(), texture.size_vec2()));
                             });
