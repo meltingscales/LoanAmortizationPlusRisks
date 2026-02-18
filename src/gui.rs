@@ -137,6 +137,10 @@ struct LoanParams {
     closing_cost_percent: f32,
     monthly_gross_income: f32,
     other_monthly_debts: f32,
+    // Rent vs Buy
+    monthly_rent: f32,
+    rent_inflation: f32,
+    stock_return: f32,
 }
 
 impl Default for LoanParams {
@@ -157,6 +161,9 @@ impl Default for LoanParams {
             closing_cost_percent: 2.5,
             monthly_gross_income: 10_000.0,
             other_monthly_debts: 500.0,
+            monthly_rent: 2_000.0,
+            rent_inflation: 3.0,
+            stock_return: 7.0,
         }
     }
 }
@@ -166,7 +173,7 @@ struct LoanCalcGui {
     params: LoanParams,
     chart_textures: HashMap<String, egui::TextureHandle>,
     scenarios: HashMap<String, AmortizationSchedule>,
-    show_scenarios: [bool; 5],
+    show_scenarios: [bool; 6],
     scenario_names: Vec<String>,
     selected_tab: String,
     regenerate_chart: bool,
@@ -180,13 +187,14 @@ impl LoanCalcGui {
             params: LoanParams::default(),
             chart_textures: HashMap::new(),
             scenarios: HashMap::new(),
-            show_scenarios: [true, true, true, true, true],
+            show_scenarios: [true, true, true, true, true, true],
             scenario_names: vec![
                 "Base Case".to_string(),
                 "High Rate".to_string(),
                 "Low Down".to_string(),
                 "Extra Principal".to_string(),
                 "With Disasters".to_string(),
+                "Bi-weekly".to_string(),
             ],
             selected_tab: "Base Case".to_string(),
             regenerate_chart: true,
@@ -266,6 +274,17 @@ impl LoanCalcGui {
                 *e -= 40_000.0;
             }
             self.scenarios.insert("With Disasters".to_string(), schedule);
+        }
+
+        // Bi-weekly payments: paying half the monthly payment every two weeks
+        // = 26 half-payments/year = 13 full payments vs 12, equivalent to
+        // one extra payment per year (extra_monthly = base_payment / 12).
+        if self.show_scenarios[5] {
+            let base_payment = base_calc.calculate_schedule(0.0).monthly_payment;
+            self.scenarios.insert(
+                "Bi-weekly Pmts".to_string(),
+                base_calc.calculate_schedule(base_payment / 12.0),
+            );
         }
     }
 
@@ -692,7 +711,27 @@ impl eframe::App for LoanCalcGui {
 
                     // DTI Qualifier
                     ui.group(|ui| {
-                        ui.heading("DTI Qualifier");
+                        ui.horizontal(|ui| {
+                            ui.heading("DTI Qualifier");
+                            ui.label("ℹ").on_hover_text(
+                                "Debt-to-Income (DTI) ratio is the primary metric \
+                                lenders use to approve or deny a mortgage.\n\n\
+                                Front-end DTI (limit ~28%):\n\
+                                Your total housing payment (principal, interest, \
+                                taxes, insurance, PMI, HOA) divided by gross \
+                                monthly income. Keeps housing costs from \
+                                crowding out everything else in your budget.\n\n\
+                                Back-end DTI (limit ~43%):\n\
+                                All monthly debt obligations (housing + car loans \
+                                + student loans + credit cards) divided by gross \
+                                income. This is the number most lenders focus on \
+                                for final approval.\n\n\
+                                Exceeding either limit typically means denial or \
+                                a higher rate. FHA loans allow up to 31% / 57% \
+                                with compensating factors; conventional loans are \
+                                stricter."
+                            );
+                        });
                         ui.add_space(5.0);
 
                         ui.label("Monthly Gross Income:");
@@ -789,6 +828,145 @@ impl eframe::App for LoanCalcGui {
 
                     ui.add_space(10.0);
 
+                    // Rent vs Buy
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.heading("Rent vs Buy");
+                            ui.label("ℹ").on_hover_text(
+                                "Estimates when buying beats renting financially.\n\n\
+                                The buyer starts with a deficit equal to cash-to-close \
+                                (down payment + closing costs). Each month the buyer gains \
+                                equity (principal + appreciation) but pays more than a renter \
+                                (PITI vs rent). The renter's down-payment cash is assumed \
+                                invested in stocks at the given return rate.\n\n\
+                                Break-even = the year cumulative net advantage of buying \
+                                crosses zero. Before that year, renting wins financially; \
+                                after it, buying wins.\n\n\
+                                This model omits maintenance costs (~1%/yr of home value) \
+                                and mortgage interest tax deductions — both meaningful for \
+                                a more complete picture."
+                            );
+                        });
+                        ui.add_space(5.0);
+
+                        ui.label("Current Monthly Rent:");
+                        ui.add(egui::Slider::new(&mut self.params.monthly_rent, 500.0..=8_000.0)
+                            .step_by(50.0)
+                            .prefix("$")
+                            .show_value(true));
+
+                        ui.label("Rent Inflation:");
+                        ui.add(egui::Slider::new(&mut self.params.rent_inflation, 0.0..=8.0)
+                            .step_by(0.5)
+                            .suffix("% /yr")
+                            .show_value(true));
+
+                        ui.label("Stock Return (opportunity cost):");
+                        ui.add(egui::Slider::new(&mut self.params.stock_return, 0.0..=15.0)
+                            .step_by(0.5)
+                            .suffix("% /yr")
+                            .show_value(true));
+
+                        ui.add_space(6.0);
+
+                        // Compute break-even using Base Case schedule
+                        let hp      = self.params.home_price as f64;
+                        let dp_pct  = self.params.down_payment_percent as f64;
+                        let down    = hp * dp_pct / 100.0;
+                        let loan    = hp * (1.0 - dp_pct / 100.0);
+                        let closing = loan * self.params.closing_cost_percent as f64 / 100.0;
+                        let cash_to_close = down + closing;
+
+                        let mo_pi  = self.scenarios.get("Base Case")
+                            .or_else(|| self.scenarios.values().next())
+                            .map(|s| s.monthly_payment).unwrap_or(0.0);
+                        let mo_tax = hp * self.params.property_tax_rate as f64 / 100.0 / 12.0;
+                        let mo_ins = hp * self.params.insurance_rate as f64 / 100.0 / 12.0;
+                        let mo_pmi = if dp_pct < 20.0 {
+                            loan * self.params.pmi_rate as f64 / 100.0 / 12.0
+                        } else { 0.0 };
+                        let mo_hoa   = self.params.monthly_hoa as f64;
+                        let piti     = mo_pi + mo_tax + mo_ins + mo_pmi + mo_hoa;
+
+                        let mo_stock = self.params.stock_return as f64 / 100.0 / 12.0;
+                        let mo_rent_inflate = (1.0 + self.params.rent_inflation as f64 / 100.0)
+                            .powf(1.0 / 12.0) - 1.0;
+
+                        let maybe_schedule = self.scenarios.get("Base Case")
+                            .or_else(|| self.scenarios.values().next())
+                            .cloned();
+
+                        if let Some(schedule) = maybe_schedule {
+                            let mut cum_net     = -cash_to_close;
+                            let mut rent        = self.params.monthly_rent as f64;
+                            let mut break_even  = None::<f64>;
+                            let mut prev_equity = down;
+
+                            for i in 0..schedule.months.len() {
+                                let equity_gain     = schedule.equity[i] - prev_equity;
+                                prev_equity         = schedule.equity[i];
+                                // Opportunity cost: renter invests the cash-to-close and grows it
+                                let opp_cost        = cash_to_close * mo_stock;
+                                // Monthly net advantage of buying vs renting
+                                cum_net += equity_gain + rent - piti - opp_cost;
+                                if break_even.is_none() && cum_net >= 0.0 {
+                                    break_even = Some(schedule.years[i]);
+                                }
+                                rent *= 1.0 + mo_rent_inflate;
+                            }
+
+                            let final_rent_paid: f64 = {
+                                let mut r = self.params.monthly_rent as f64;
+                                let mut total = 0.0;
+                                for _ in 0..schedule.months.len() {
+                                    total += r;
+                                    r *= 1.0 + mo_rent_inflate;
+                                }
+                                total
+                            };
+                            let final_buying_paid = piti * schedule.months.len() as f64;
+                            let final_equity = schedule.equity.last().copied().unwrap_or(0.0);
+
+                            ui.label(format!("30yr rent paid:    ${:.0}", final_rent_paid));
+                            ui.label(format!("30yr PITI paid:    ${:.0}", final_buying_paid));
+                            ui.label(format!("30yr equity built: ${:.0}", final_equity));
+
+                            ui.add_space(4.0);
+                            match break_even {
+                                Some(yr) => {
+                                    let color = if yr <= 7.0 {
+                                        egui::Color32::from_rgb(46, 204, 113)
+                                    } else if yr <= 15.0 {
+                                        egui::Color32::from_rgb(241, 196, 15)
+                                    } else {
+                                        egui::Color32::from_rgb(231, 76, 60)
+                                    };
+                                    ui.label(egui::RichText::new(
+                                        format!("Break-even: year {:.1}", yr)
+                                    ).strong().color(color));
+                                }
+                                None => {
+                                    ui.label(egui::RichText::new(
+                                        "No break-even within 30 years"
+                                    ).strong().color(egui::Color32::from_rgb(231, 76, 60)));
+                                }
+                            }
+
+                            let net_color = if cum_net >= 0.0 {
+                                egui::Color32::from_rgb(46, 204, 113)
+                            } else {
+                                egui::Color32::from_rgb(231, 76, 60)
+                            };
+                            ui.label(egui::RichText::new(
+                                format!("30yr net buying advantage: ${:.0}", cum_net)
+                            ).color(net_color));
+                        } else {
+                            ui.label("Enable at least one scenario to see analysis.");
+                        }
+                    });
+
+                    ui.add_space(10.0);
+
                     // Scenario toggles
                     ui.group(|ui| {
                         ui.heading("Scenarios");
@@ -798,6 +976,7 @@ impl eframe::App for LoanCalcGui {
                         if ui.checkbox(&mut self.show_scenarios[2], "Low Down (3.5%)").changed() { self.regenerate_chart = true; }
                         if ui.checkbox(&mut self.show_scenarios[3], "Extra Principal (+$200/mo)").changed() { self.regenerate_chart = true; }
                         if ui.checkbox(&mut self.show_scenarios[4], "With Disasters").changed() { self.regenerate_chart = true; }
+                        if ui.checkbox(&mut self.show_scenarios[5], "Bi-weekly Payments").changed() { self.regenerate_chart = true; }
                     });
 
                     ui.add_space(10.0);
