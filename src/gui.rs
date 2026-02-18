@@ -135,6 +135,8 @@ struct LoanParams {
     pmi_rate: f32,
     monthly_hoa: f32,
     closing_cost_percent: f32,
+    monthly_gross_income: f32,
+    other_monthly_debts: f32,
 }
 
 impl Default for LoanParams {
@@ -153,6 +155,8 @@ impl Default for LoanParams {
             pmi_rate: 0.85,
             monthly_hoa: 0.0,
             closing_cost_percent: 2.5,
+            monthly_gross_income: 10_000.0,
+            other_monthly_debts: 500.0,
         }
     }
 }
@@ -682,6 +686,105 @@ impl eframe::App for LoanCalcGui {
                             .step_by(0.25)
                             .suffix("% of loan")
                             .show_value(true));
+                    });
+
+                    ui.add_space(10.0);
+
+                    // DTI Qualifier
+                    ui.group(|ui| {
+                        ui.heading("DTI Qualifier");
+                        ui.add_space(5.0);
+
+                        ui.label("Monthly Gross Income:");
+                        ui.add(egui::Slider::new(&mut self.params.monthly_gross_income, 2_000.0..=30_000.0)
+                            .step_by(250.0)
+                            .prefix("$")
+                            .show_value(true));
+
+                        ui.label("Other Monthly Debts:");
+                        ui.add(egui::Slider::new(&mut self.params.other_monthly_debts, 0.0..=5_000.0)
+                            .step_by(50.0)
+                            .prefix("$")
+                            .show_value(true));
+
+                        ui.add_space(6.0);
+
+                        // Compute PITI from base case (or current params if not yet calculated)
+                        let hp = self.params.home_price as f64;
+                        let dp_pct = self.params.down_payment_percent as f64;
+                        let loan_amt = hp * (1.0 - dp_pct / 100.0);
+                        let gross = self.params.monthly_gross_income as f64;
+                        let other_debts = self.params.other_monthly_debts as f64;
+
+                        let mo_pi = self.scenarios.get("Base Case")
+                            .or_else(|| self.scenarios.values().next())
+                            .map(|s| s.monthly_payment)
+                            .unwrap_or(0.0);
+                        let mo_tax = hp * self.params.property_tax_rate as f64 / 100.0 / 12.0;
+                        let mo_ins = hp * self.params.insurance_rate as f64 / 100.0 / 12.0;
+                        let mo_pmi = if dp_pct < 20.0 {
+                            loan_amt * self.params.pmi_rate as f64 / 100.0 / 12.0
+                        } else { 0.0 };
+                        let mo_hoa = self.params.monthly_hoa as f64;
+                        let piti = mo_pi + mo_tax + mo_ins + mo_pmi + mo_hoa;
+
+                        let front_dti = if gross > 0.0 { piti / gross * 100.0 } else { 0.0 };
+                        let back_dti  = if gross > 0.0 { (piti + other_debts) / gross * 100.0 } else { 0.0 };
+
+                        let dti_color = |dti: f64, limit: f64| -> egui::Color32 {
+                            if dti <= limit * 0.85      { egui::Color32::from_rgb(46, 204, 113) }
+                            else if dti <= limit        { egui::Color32::from_rgb(241, 196, 15) }
+                            else                        { egui::Color32::from_rgb(231, 76, 60)  }
+                        };
+
+                        ui.label(egui::RichText::new("Front-end DTI (PITI ÷ income):").strong());
+                        ui.label(egui::RichText::new(
+                            format!("  ${:.0} ÷ ${:.0} = {:.1}%  (limit 28%)", piti, gross, front_dti)
+                        ).color(dti_color(front_dti, 28.0)));
+
+                        ui.add_space(3.0);
+                        ui.label(egui::RichText::new("Back-end DTI (all debt ÷ income):").strong());
+                        ui.label(egui::RichText::new(
+                            format!("  ${:.0} ÷ ${:.0} = {:.1}%  (limit 43%)", piti + other_debts, gross, back_dti)
+                        ).color(dti_color(back_dti, 43.0)));
+
+                        ui.add_space(6.0);
+
+                        // Max affordable home price: solve for H such that PITI(H) = gross * 0.28
+                        // PITI(H) = H * (k_dp * amort + k_tax + k_ins + k_pmi) + mo_hoa
+                        // => H = (max_piti - mo_hoa) / (k_dp * amort + k_tax + k_ins + k_pmi)
+                        let r = self.params.interest_rate as f64 / 100.0 / 12.0;
+                        let n = (self.params.loan_term_years * 12) as i32;
+                        let amort = if r > 0.0 {
+                            r * (1.0 + r).powi(n) / ((1.0 + r).powi(n) - 1.0)
+                        } else { 1.0 / n as f64 };
+                        let k_dp  = 1.0 - dp_pct / 100.0;
+                        let k_tax = self.params.property_tax_rate as f64 / 100.0 / 12.0;
+                        let k_ins = self.params.insurance_rate as f64 / 100.0 / 12.0;
+                        let k_pmi = if dp_pct < 20.0 {
+                            k_dp * self.params.pmi_rate as f64 / 100.0 / 12.0
+                        } else { 0.0 };
+                        let cost_per_dollar = k_dp * amort + k_tax + k_ins + k_pmi;
+
+                        let max_piti_front = gross * 0.28;
+                        let max_piti_back  = (gross * 0.43 - other_debts).max(0.0);
+                        let max_piti = max_piti_front.min(max_piti_back);
+                        let max_home = if cost_per_dollar > 0.0 {
+                            (max_piti - mo_hoa) / cost_per_dollar
+                        } else { 0.0 };
+
+                        let afford_color = if hp <= max_home * 0.9 {
+                            egui::Color32::from_rgb(46, 204, 113)
+                        } else if hp <= max_home {
+                            egui::Color32::from_rgb(241, 196, 15)
+                        } else {
+                            egui::Color32::from_rgb(231, 76, 60)
+                        };
+
+                        ui.label(egui::RichText::new("Max affordable home price:").strong());
+                        ui.label(egui::RichText::new(
+                            format!("  ${:.0}  (current: ${:.0})", max_home, hp)
+                        ).color(afford_color));
                     });
 
                     ui.add_space(10.0);
