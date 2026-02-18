@@ -138,9 +138,9 @@ impl Default for LoanParams {
             interest_rate: 6.5,
             loan_term_years: 30,
             appreciation_rate: 3.0,
-            chart_width: 2400,
-            chart_height: 1600,
-            font_size: 28,
+            chart_width: 800,
+            chart_height: 600,
+            font_size: 20,
         }
     }
 }
