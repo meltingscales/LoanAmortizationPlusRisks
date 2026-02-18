@@ -1,0 +1,14 @@
+[project]
+name = "loan-amortization-risks"
+version = "0.1.0"
+description = "Home loan amortization calculator with risk analysis for Florida home buyers"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.0.0",
+    "pandas>=2.0.0",
+    "matplotlib>=3.9.0",
+]
+
+[dependency-groups]
+dev = []
