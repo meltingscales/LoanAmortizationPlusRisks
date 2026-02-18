@@ -148,10 +148,11 @@ impl Default for LoanParams {
 /// The main GUI application
 struct LoanCalcGui {
     params: LoanParams,
-    chart_texture: Option<egui::TextureHandle>,
+    chart_textures: HashMap<String, egui::TextureHandle>,
     scenarios: HashMap<String, AmortizationSchedule>,
     show_scenarios: [bool; 5],
     scenario_names: Vec<String>,
+    selected_tab: String,
     regenerate_chart: bool,
 }
 
@@ -159,7 +160,7 @@ impl LoanCalcGui {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         Self {
             params: LoanParams::default(),
-            chart_texture: None,
+            chart_textures: HashMap::new(),
             scenarios: HashMap::new(),
             show_scenarios: [true, true, true, true, true],
             scenario_names: vec![
@@ -169,6 +170,7 @@ impl LoanCalcGui {
                 "Extra Principal".to_string(),
                 "With Disasters".to_string(),
             ],
+            selected_tab: "Base Case".to_string(),
             regenerate_chart: true,
         }
     }
@@ -247,128 +249,101 @@ impl LoanCalcGui {
         }
     }
 
-    fn generate_chart(&mut self, ctx: &egui::Context) {
-        if self.scenarios.is_empty() {
-            return;
-        }
+    fn generate_chart_for_tab(&mut self, ctx: &egui::Context, name: &str) {
+        // Clone the schedule so we don't hold a borrow on self.scenarios
+        let schedule = match self.scenarios.get(name).cloned() {
+            Some(s) => s,
+            None => return,
+        };
 
         let chart_width = self.params.chart_width;
         let chart_height = self.params.chart_height;
         let caption_font_size = self.params.font_size;
         let label_font_size = (self.params.font_size as f32 * 0.75) as u32;
 
-        // Create in-memory chart
+        let equity_color = RGBColor(46, 204, 113);
+        let bank_color = RGBColor(231, 76, 60);
+        let text_color = BLACK;
+
+        let final_equity = schedule.equity.last().copied().unwrap_or(0.0);
+        let final_bank = schedule.interest_paid.last().copied().unwrap_or(0.0);
+        let bank_share = if final_equity + final_bank > 0.0 {
+            final_bank / (final_equity + final_bank) * 100.0
+        } else {
+            0.0
+        };
+        let y_max = (final_equity.max(final_bank) * 1.1).ceil() as f64;
+
+        let title = format!(
+            "{}\nBank Share: {:.1}%\nHome: ${} | Down: {}% | Rate: {}%",
+            name, bank_share,
+            self.params.home_price as u64,
+            self.params.down_payment_percent,
+            self.params.interest_rate
+        );
+
         let mut buffer = vec![0u8; (chart_width * chart_height * 3) as usize];
         {
             let root = BitMapBackend::with_buffer(&mut buffer, (chart_width, chart_height)).into_drawing_area();
             root.fill(&WHITE).unwrap();
 
-            let equity_color = RGBColor(46, 204, 113);
-            let bank_color = RGBColor(231, 76, 60);
-            let text_color = BLACK;
+            let mut chart = ChartBuilder::on(&root)
+                .margin_left(60)
+                .margin_right(40)
+                .margin_top(60)
+                .margin_bottom(50)
+                .caption(&title, ("sans-serif", caption_font_size).into_font().with_color(&text_color))
+                .x_label_area_size(50)
+                .y_label_area_size(80)
+                .build_cartesian_2d(0f64..30f64, 0f64..y_max).unwrap();
 
-            let n_scenarios = self.scenarios.len();
-            let n_cols = 3.min(n_scenarios);
-            let n_rows = (n_scenarios + n_cols - 1) / n_cols;
+            chart.configure_mesh()
+                .x_desc("Years")
+                .y_desc("Amount ($)")
+                .x_label_style(("sans-serif", label_font_size).into_font())
+                .y_label_style(("sans-serif", label_font_size).into_font())
+                .y_label_formatter(&|x| format!("${:.0}K", x / 1000.0))
+                .draw().unwrap();
 
-            let areas = root.split_evenly((n_rows, n_cols));
+            let equity_points: Vec<(f64, f64)> = schedule.years.iter()
+                .zip(schedule.equity.iter())
+                .map(|(x, y)| (*x, *y))
+                .collect();
 
-            let mut scenario_data: Vec<_> = self.scenarios.iter().collect();
-            scenario_data.sort_by_key(|(k, _)| *k);
+            chart.draw_series(AreaSeries::new(
+                equity_points.clone(), 0.0, equity_color.mix(0.3),
+            )).unwrap();
+            chart.draw_series(LineSeries::new(
+                equity_points, equity_color.stroke_width(3),
+            )).unwrap().label("Your Equity")
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], equity_color.stroke_width(3)));
 
-            for (idx, (name, schedule)) in scenario_data.iter().enumerate() {
-                if idx >= areas.len() { break; }
+            let bank_points: Vec<(f64, f64)> = schedule.years.iter()
+                .zip(schedule.interest_paid.iter())
+                .map(|(x, y)| (*x, *y))
+                .collect();
 
-                let area = &areas[idx];
-                let final_equity = schedule.equity.last().copied().unwrap_or(0.0);
-                let final_bank = schedule.interest_paid.last().copied().unwrap_or(0.0);
-                let bank_share = if final_equity + final_bank > 0.0 {
-                    final_bank / (final_equity + final_bank) * 100.0
-                } else {
-                    0.0
-                };
+            chart.draw_series(AreaSeries::new(
+                bank_points.clone(), 0.0, bank_color.mix(0.3),
+            )).unwrap();
+            chart.draw_series(LineSeries::new(
+                bank_points, bank_color.stroke_width(3),
+            )).unwrap().label("Bank's Profit")
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], bank_color.stroke_width(3)));
 
-                let max_value = final_equity.max(final_bank);
-                let y_max = (max_value * 1.1).ceil() as f64;
-
-                let title = format!(
-                    "{}\nBank Share: {:.1}%\nHome: ${} | Down: {}% | Rate: {}%",
-                    name, bank_share,
-                    self.params.home_price as u64,
-                    self.params.down_payment_percent,
-                    self.params.interest_rate
-                );
-
-                let mut chart = ChartBuilder::on(area)
-                    .margin_left(60)
-                    .margin_right(20)
-                    .margin_top(50)
-                    .margin_bottom(40)
-                    .caption(&title, ("sans-serif", caption_font_size).into_font().with_color(&text_color))
-                    .x_label_area_size(40)
-                    .y_label_area_size(70)
-                    .build_cartesian_2d(0f64..30f64, 0f64..y_max).unwrap();
-
-                chart.configure_mesh()
-                    .x_desc("Years")
-                    .y_desc("Amount ($)")
-                    .x_label_style(("sans-serif", label_font_size).into_font())
-                    .y_label_style(("sans-serif", label_font_size).into_font())
-                    .y_label_formatter(&|x| format!("${:.0}K", x / 1000.0))
-                    .draw().unwrap();
-
-                // Draw equity
-                let equity_points: Vec<(f64, f64)> = schedule.years.iter()
-                    .zip(schedule.equity.iter())
-                    .map(|(x, y)| (*x, *y))
-                    .collect();
-
-                chart.draw_series(AreaSeries::new(
-                    equity_points.clone(),
-                    0.0,
-                    equity_color.mix(0.3),
-                )).unwrap();
-
-                chart.draw_series(LineSeries::new(
-                    equity_points,
-                    equity_color.stroke_width(2),
-                )).unwrap().label("Your Equity")
-                .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 10, y)], equity_color.stroke_width(2)));
-
-                // Draw bank profit
-                let bank_points: Vec<(f64, f64)> = schedule.years.iter()
-                    .zip(schedule.interest_paid.iter())
-                    .map(|(x, y)| (*x, *y))
-                    .collect();
-
-                chart.draw_series(AreaSeries::new(
-                    bank_points.clone(),
-                    0.0,
-                    bank_color.mix(0.3),
-                )).unwrap();
-
-                chart.draw_series(LineSeries::new(
-                    bank_points,
-                    bank_color.stroke_width(2),
-                )).unwrap().label("Bank's Profit")
-                .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 10, y)], bank_color.stroke_width(2)));
-
-                chart.configure_series_labels()
-                    .background_style(WHITE.mix(0.8))
-                    .border_style(BLACK.stroke_width(1))
-                    .position(SeriesLabelPosition::UpperLeft)
-                    .draw().unwrap();
-            }
+            chart.configure_series_labels()
+                .background_style(WHITE.mix(0.8))
+                .border_style(BLACK.stroke_width(1))
+                .position(SeriesLabelPosition::UpperLeft)
+                .draw().unwrap();
         }
 
-        // Convert to image texture
-        self.chart_texture = Some(ctx.load_texture(
-            "chart",
+        let texture = ctx.load_texture(
+            name,
             egui::ColorImage::from_rgb([chart_width as usize, chart_height as usize], &buffer),
             egui::TextureOptions::LINEAR,
-        ));
-
-        self.regenerate_chart = false;
+        );
+        self.chart_textures.insert(name.to_string(), texture);
     }
 
     fn export_csv(&self) {
@@ -422,6 +397,20 @@ impl LoanCalcGui {
 
 impl eframe::App for LoanCalcGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Recalculate scenarios and clear texture cache when params change
+        if self.regenerate_chart {
+            self.calculate_all_scenarios();
+            self.chart_textures.clear();
+            self.regenerate_chart = false;
+
+            // If selected tab was removed (scenario unchecked), pick the first available
+            if !self.scenarios.contains_key(&self.selected_tab) {
+                if let Some(name) = self.scenarios.keys().sorted().next() {
+                    self.selected_tab = name.clone();
+                }
+            }
+        }
+
         // Left controls panel — SidePanel claims its space before CentralPanel
         egui::SidePanel::left("controls_panel")
             .resizable(true)
@@ -605,14 +594,26 @@ impl eframe::App for LoanCalcGui {
 
         // Chart panel — CentralPanel fills all remaining space, giving ScrollArea full height
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Equity vs Bank Profit");
+            // Tab bar — one tab per active scenario
+            ui.horizontal(|ui: &mut egui::Ui| {
+                let tab_names: Vec<String> = self.scenarios.keys().sorted().cloned().collect();
+                for name in tab_names {
+                    if ui.selectable_label(self.selected_tab == name, &name).clicked()
+                        && self.selected_tab != name
+                    {
+                        self.selected_tab = name;
+                    }
+                }
+            });
+            ui.separator();
 
-            if self.regenerate_chart || self.chart_texture.is_none() {
-                self.calculate_all_scenarios();
-                self.generate_chart(ctx);
+            // Generate chart for the selected tab if not cached yet
+            if !self.chart_textures.contains_key(&self.selected_tab) {
+                let tab = self.selected_tab.clone();
+                self.generate_chart_for_tab(ctx, &tab);
             }
 
-            if let Some(texture) = &self.chart_texture {
+            if let Some(texture) = self.chart_textures.get(&self.selected_tab) {
                 egui::ScrollArea::both()
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
