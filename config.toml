@@ -1,0 +1,32 @@
+# Loan Amortization Calculator Configuration - Rust Edition
+# Edit these values and run: cargo run --release
+
+[loan]
+home_price = 450000          # Purchase price in dollars
+down_payment_percent = 20.0  # Down payment percentage
+interest_rate = 6.5          # Annual interest rate percentage
+loan_term_years = 30         # Loan term in years
+start_year = 2026            # Year of purchase
+appreciation_rate = 3.0      # Annual home appreciation percentage
+
+[scenarios]
+# Set to true to include in the side-by-side comparison
+show_base = true
+show_high_rate = true
+show_low_down = true
+show_extra_principal = true
+show_disasters = true
+
+[scenario_params]
+high_rate_percent = 8.0              # Interest rate for high rate scenario
+low_down_percent = 3.5               # Down payment for low down scenario
+extra_principal_monthly = 200        # Extra monthly payment
+disaster_appreciation_rate = 2.0     # Lower appreciation in disaster zones
+disaster_cost_total = 40000          # Total disaster costs (hurricane + flood)
+
+[display]
+# Chart settings - dimensions in pixels
+chart_width = 1800
+chart_height = 1200
+output_file = "loan_comparison.png"
+show_grid = true

@@ -1,1 +1,4 @@
-__pycache__/
+/target/
+*.png
+output_summary.txt
+loan_data.json
