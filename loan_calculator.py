@@ -9,13 +9,14 @@ import pandas as pd
 
 # Use interactive backend for widget support
 import matplotlib
+# Try backends in order: TkAgg (most compatible), Qt5Agg, then fall back
 try:
-    matplotlib.use('Qt5Agg')
-except ImportError:
+    matplotlib.use('TkAgg')
+except (ImportError, Exception):
     try:
-        matplotlib.use('TkAgg')
-    except ImportError:
-        matplotlib.use('module://ipympl.backend_nbagg')
+        matplotlib.use('Qt5Agg')
+    except (ImportError, Exception):
+        pass  # Use default
 
 import matplotlib.pyplot as plt
 from matplotlib.widgets import CheckButtons, Slider
