@@ -347,7 +347,7 @@ fn generate_chart(config: &Config, scenarios: &HashMap<String, AmortizationSched
             .margin_right(20)
             .margin_top(50)
             .margin_bottom(40)
-            .caption(&title, ("sans-serif", 14).into_font().with_color(&text_color))
+            .caption(&title, ("sans-serif", 28).into_font().with_color(&text_color))
             .x_label_area_size(40)
             .y_label_area_size(70)
             .build_cartesian_2d(0f64..30f64, 0f64..y_max)?;
@@ -355,8 +355,8 @@ fn generate_chart(config: &Config, scenarios: &HashMap<String, AmortizationSched
         chart.configure_mesh()
             .x_desc("Years")
             .y_desc("Amount ($)")
-            .x_label_style(("sans-serif", 11).into_font())
-            .y_label_style(("sans-serif", 11).into_font())
+            .x_label_style(("sans-serif", 22).into_font())
+            .y_label_style(("sans-serif", 22).into_font())
             .y_label_formatter(&|x| format!("${:.0}K", x / 1000.0))
             .draw()?;
 
