@@ -589,8 +589,12 @@ impl eframe::App for LoanCalcGui {
                     }
 
                     if let Some(texture) = &self.chart_texture {
-                        // Show chart
-                        ui.image((texture.id(), texture.size_vec2()));
+                        // Show chart in scrollable area
+                        egui::ScrollArea::both()
+                            .auto_shrink([false; 2])
+                            .show(ui, |ui| {
+                                ui.image((texture.id(), texture.size_vec2()));
+                            });
                     } else {
                         ui.label("Generating chart...");
                     }
