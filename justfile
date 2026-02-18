@@ -8,9 +8,13 @@ default:
 install:
     uv sync
 
-# Run the loan calculator (default settings)
+# Run the loan calculator (default settings) - interactive with checkboxes
 run:
     uv run python loan_calculator.py
+
+# Run side-by-side comparison (no widgets needed - more reliable)
+run-sidebyside:
+    uv run python loan_calculator_sidebyside.py
 
 # =====================================
 # Test Scripts - Example Scenarios

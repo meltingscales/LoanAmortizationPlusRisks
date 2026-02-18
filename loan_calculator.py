@@ -9,12 +9,12 @@ import pandas as pd
 
 # Use interactive backend for widget support
 import matplotlib
-# Try backends in order: TkAgg (most compatible), Qt5Agg, then fall back
+# Try Qt5Agg first (best widget support), then fall back
 try:
-    matplotlib.use('TkAgg')
+    matplotlib.use('Qt5Agg')
 except (ImportError, Exception):
     try:
-        matplotlib.use('Qt5Agg')
+        matplotlib.use('TkAgg')
     except (ImportError, Exception):
         pass  # Use default
 
