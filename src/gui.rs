@@ -422,24 +422,17 @@ impl LoanCalcGui {
 
 impl eframe::App for LoanCalcGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Recalculate if needed
-        if self.regenerate_chart {
-            self.calculate_all_scenarios();
-        }
+        // Left controls panel — SidePanel claims its space before CentralPanel
+        egui::SidePanel::left("controls_panel")
+            .resizable(false)
+            .exact_width(300.0)
+            .show(ctx, |ui| {
+                ui.heading("🏠 Loan Calculator");
+                ui.separator();
 
-        // Top panel with sliders
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("🏠 Loan Amortization Calculator - Interactive Mode");
-            ui.separator();
-
-            // Split into controls (left) and chart (right)
-            ui.horizontal(|ui| {
-                // Controls panel - fixed width, scrollable
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
-                    .max_width(300.0)
                     .show(ui, |ui| {
-                        ui.vertical(|ui| {
 
                     ui.group(|ui| {
                         ui.heading("Loan Parameters");
@@ -503,7 +496,7 @@ impl eframe::App for LoanCalcGui {
                         // Chart Size
                         ui.label("Chart Size:");
 
-                        ui.horizontal(|ui| {
+                        ui.horizontal(|ui: &mut egui::Ui| {
                             ui.label("W:");
                             if ui.add(egui::Slider::new(&mut self.params.chart_width, 800..=4000)
                                 .step_by(100.0)
@@ -540,13 +533,11 @@ impl eframe::App for LoanCalcGui {
                     ui.group(|ui| {
                         ui.heading("Scenarios");
 
-                        ui.checkbox(&mut self.show_scenarios[0], "Base Case");
-                        ui.checkbox(&mut self.show_scenarios[1], "High Rate (8%)");
-                        ui.checkbox(&mut self.show_scenarios[2], "Low Down (3.5%)");
-                        ui.checkbox(&mut self.show_scenarios[3], "Extra Principal (+$200/mo)");
-                        ui.checkbox(&mut self.show_scenarios[4], "With Disasters");
-
-                        ui.label("(Check boxes to toggle scenarios)");
+                        if ui.checkbox(&mut self.show_scenarios[0], "Base Case").changed() { self.regenerate_chart = true; }
+                        if ui.checkbox(&mut self.show_scenarios[1], "High Rate (8%)").changed() { self.regenerate_chart = true; }
+                        if ui.checkbox(&mut self.show_scenarios[2], "Low Down (3.5%)").changed() { self.regenerate_chart = true; }
+                        if ui.checkbox(&mut self.show_scenarios[3], "Extra Principal (+$200/mo)").changed() { self.regenerate_chart = true; }
+                        if ui.checkbox(&mut self.show_scenarios[4], "With Disasters").changed() { self.regenerate_chart = true; }
                     });
 
                     ui.add_space(10.0);
@@ -561,7 +552,6 @@ impl eframe::App for LoanCalcGui {
                         if !self.scenarios.is_empty() {
                             ui.add_space(5.0);
 
-                            // Show base case summary if available
                             if let Some(base) = self.scenarios.get("Base Case") {
                                 let equity = base.equity.last().copied().unwrap_or(0.0) / 1000.0;
                                 let bank = base.interest_paid.last().copied().unwrap_or(0.0) / 1000.0;
@@ -575,10 +565,8 @@ impl eframe::App for LoanCalcGui {
 
                         ui.add_space(10.0);
 
-                        // Export button
                         if ui.button("📥 Export CSV").clicked() {
                             self.export_csv();
-                            ui.label("CSV files exported!");
                         }
                     });
 
@@ -596,53 +584,42 @@ impl eframe::App for LoanCalcGui {
                                 #[cfg(target_os = "linux")]
                                 {
                                     use std::process::Command;
-                                    let _ = Command::new("xdg-open")
-                                        .arg(&filename)
-                                        .spawn();
+                                    let _ = Command::new("xdg-open").arg(&filename).spawn();
                                 }
                                 #[cfg(target_os = "macos")]
                                 {
                                     use std::process::Command;
-                                    let _ = Command::new("open")
-                                        .arg(&filename)
-                                        .spawn();
+                                    let _ = Command::new("open").arg(&filename).spawn();
                                 }
                                 #[cfg(target_os = "windows")]
                                 {
                                     use std::process::Command;
-                                    let _ = Command::new("cmd")
-                                        .args(["/c", "start", "", &filename])
-                                        .spawn();
+                                    let _ = Command::new("cmd").args(["/c", "start", "", &filename]).spawn();
                                 }
                             }
                         }
                     });
-                }); // closes ui.vertical inside ScrollArea
-                }); // end ScrollArea
+                }); // end controls ScrollArea
+            }); // end SidePanel
 
-                // Chart display - remaining space
-                ui.vertical(|ui| {
-                    ui.heading("Equity vs Bank Profit");
+        // Chart panel — CentralPanel fills all remaining space, giving ScrollArea full height
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Equity vs Bank Profit");
 
-                    if self.regenerate_chart || self.chart_texture.is_none() {
-                        self.calculate_all_scenarios();
-                        self.generate_chart(ctx);
-                    }
+            if self.regenerate_chart || self.chart_texture.is_none() {
+                self.calculate_all_scenarios();
+                self.generate_chart(ctx);
+            }
 
-                    if let Some(texture) = &self.chart_texture {
-                        // Show chart in scrollable area - fill whatever height is left
-                        let available_h = ui.available_height();
-                        egui::ScrollArea::both()
-                            .auto_shrink([false; 2])
-                            .min_scrolled_height(available_h)
-                            .show(ui, |ui| {
-                                ui.image((texture.id(), texture.size_vec2()));
-                            });
-                    } else {
-                        ui.label("Generating chart...");
-                    }
-                });
-            });
+            if let Some(texture) = &self.chart_texture {
+                egui::ScrollArea::both()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        ui.image((texture.id(), texture.size_vec2()));
+                    });
+            } else {
+                ui.label("Generating chart...");
+            }
         });
     }
 }
