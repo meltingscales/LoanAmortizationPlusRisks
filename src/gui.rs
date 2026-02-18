@@ -278,9 +278,37 @@ impl LoanCalcGui {
         let label_font_size = (self.params.font_size as f32 * 0.75) as u32;
         let stacked = self.stacked_chart;
 
+        // Capture cost params before any borrow
+        let home_price = self.params.home_price as f64;
+        let down_pct = self.params.down_payment_percent as f64;
+        let property_tax_rate = self.params.property_tax_rate as f64;
+        let insurance_rate = self.params.insurance_rate as f64;
+        let pmi_rate = self.params.pmi_rate as f64;
+        let monthly_hoa = self.params.monthly_hoa as f64;
+
         let equity_color = RGBColor(46, 204, 113);
         let bank_color = RGBColor(231, 76, 60);
+        let cost_color = RGBColor(230, 126, 34); // orange
         let text_color = BLACK;
+
+        // Cumulative ownership costs (tax + insurance + PMI + HOA).
+        // PMI cancels once the loan balance drops to 80% LTV.
+        // For the "Low Down" scenario the effective down payment is 3.5%.
+        let effective_down = if name.contains("Low Down") { 3.5_f64 } else { down_pct };
+        let mo_tax = home_price * property_tax_rate / 100.0 / 12.0;
+        let mo_ins = home_price * insurance_rate / 100.0 / 12.0;
+        let base_mo_pmi = if effective_down < 20.0 {
+            home_price * (1.0 - effective_down / 100.0) * pmi_rate / 100.0 / 12.0
+        } else { 0.0 };
+        let mut cum_extra = 0.0;
+        let extra_pts: Vec<(f64, f64)> = schedule.years.iter()
+            .zip(schedule.balance.iter())
+            .map(|(yr, bal)| {
+                let pmi_this = if *bal / home_price > 0.80 { base_mo_pmi } else { 0.0 };
+                cum_extra += mo_tax + mo_ins + pmi_this + monthly_hoa;
+                (*yr, cum_extra)
+            })
+            .collect();
 
         // Mode-dependent title and y_max
         let (title, y_max) = if stacked {
@@ -298,6 +326,7 @@ impl LoanCalcGui {
         } else {
             let final_equity = schedule.equity.last().copied().unwrap_or(0.0);
             let final_bank = schedule.interest_paid.last().copied().unwrap_or(0.0);
+            let final_extra = extra_pts.last().map(|(_, y)| *y).unwrap_or(0.0);
             let bank_share = if final_equity + final_bank > 0.0 {
                 final_bank / (final_equity + final_bank) * 100.0
             } else { 0.0 };
@@ -308,7 +337,7 @@ impl LoanCalcGui {
                 self.params.down_payment_percent,
                 self.params.interest_rate
             );
-            (t, (final_equity.max(final_bank) * 1.1).ceil() as f64)
+            (t, (final_equity.max(final_bank).max(final_extra) * 1.1).ceil() as f64)
         };
 
         let mut buffer = vec![0u8; (chart_width * chart_height * 3) as usize];
@@ -365,7 +394,7 @@ impl LoanCalcGui {
                 )).unwrap().label("Your Equity")
                 .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], equity_color.stroke_width(3)));
             } else {
-                // Overlay view: equity vs cumulative interest, both from zero
+                // Overlay view: equity vs cumulative interest vs ownership costs, all from zero
                 let equity_points: Vec<(f64, f64)> = schedule.years.iter()
                     .zip(schedule.equity.iter())
                     .map(|(x, y)| (*x, *y))
@@ -391,6 +420,12 @@ impl LoanCalcGui {
                     bank_points, bank_color.stroke_width(3),
                 )).unwrap().label("Bank's Profit")
                 .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], bank_color.stroke_width(3)));
+
+                // Ownership costs (tax + insurance + PMI + HOA) — orange line, no fill
+                chart.draw_series(LineSeries::new(
+                    extra_pts, cost_color.stroke_width(2),
+                )).unwrap().label("Tax + Ins + PMI + HOA")
+                .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], cost_color.stroke_width(2)));
             }
 
             chart.configure_series_labels()
@@ -610,16 +645,18 @@ impl eframe::App for LoanCalcGui {
                         ui.add_space(5.0);
 
                         ui.label("Property Tax:");
-                        ui.add(egui::Slider::new(&mut self.params.property_tax_rate, 0.0..=3.0)
+                        if ui.add(egui::Slider::new(&mut self.params.property_tax_rate, 0.0..=3.0)
                             .step_by(0.1)
                             .suffix("% /yr")
-                            .show_value(true));
+                            .show_value(true)
+                        ).changed() { self.chart_textures.clear(); }
 
                         ui.label("Home Insurance:");
-                        ui.add(egui::Slider::new(&mut self.params.insurance_rate, 0.0..=5.0)
+                        if ui.add(egui::Slider::new(&mut self.params.insurance_rate, 0.0..=5.0)
                             .step_by(0.1)
                             .suffix("% /yr")
-                            .show_value(true));
+                            .show_value(true)
+                        ).changed() { self.chart_textures.clear(); }
 
                         let pmi_label = if self.params.down_payment_percent < 20.0 {
                             "PMI:"
@@ -627,16 +664,18 @@ impl eframe::App for LoanCalcGui {
                             "PMI (N/A — down ≥20%):"
                         };
                         ui.label(pmi_label);
-                        ui.add(egui::Slider::new(&mut self.params.pmi_rate, 0.0..=2.0)
+                        if ui.add(egui::Slider::new(&mut self.params.pmi_rate, 0.0..=2.0)
                             .step_by(0.05)
                             .suffix("% /yr")
-                            .show_value(true));
+                            .show_value(true)
+                        ).changed() { self.chart_textures.clear(); }
 
                         ui.label("Monthly HOA:");
-                        ui.add(egui::Slider::new(&mut self.params.monthly_hoa, 0.0..=1000.0)
+                        if ui.add(egui::Slider::new(&mut self.params.monthly_hoa, 0.0..=1000.0)
                             .step_by(25.0)
                             .prefix("$")
-                            .show_value(true));
+                            .show_value(true)
+                        ).changed() { self.chart_textures.clear(); }
 
                         ui.label("Closing Costs:");
                         ui.add(egui::Slider::new(&mut self.params.closing_cost_percent, 0.5..=6.0)
