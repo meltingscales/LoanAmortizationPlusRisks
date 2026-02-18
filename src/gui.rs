@@ -4,6 +4,7 @@
 #![cfg(feature = "gui")]
 
 use eframe::egui;
+use egui_extras::{Column, TableBuilder};
 use plotters::prelude::*;
 use std::collections::HashMap;
 use itertools::Itertools;
@@ -128,6 +129,12 @@ struct LoanParams {
     chart_width: u32,
     chart_height: u32,
     font_size: u32,
+    // Additional monthly costs
+    property_tax_rate: f32,
+    insurance_rate: f32,
+    pmi_rate: f32,
+    monthly_hoa: f32,
+    closing_cost_percent: f32,
 }
 
 impl Default for LoanParams {
@@ -141,6 +148,11 @@ impl Default for LoanParams {
             chart_width: 800,
             chart_height: 600,
             font_size: 20,
+            property_tax_rate: 1.1,
+            insurance_rate: 1.5,
+            pmi_rate: 0.85,
+            monthly_hoa: 0.0,
+            closing_cost_percent: 2.5,
         }
     }
 }
@@ -154,6 +166,8 @@ struct LoanCalcGui {
     scenario_names: Vec<String>,
     selected_tab: String,
     regenerate_chart: bool,
+    show_amort_table: bool,
+    stacked_chart: bool,
 }
 
 impl LoanCalcGui {
@@ -172,6 +186,8 @@ impl LoanCalcGui {
             ],
             selected_tab: "Base Case".to_string(),
             regenerate_chart: true,
+            show_amort_table: false,
+            stacked_chart: false,
         }
     }
 
@@ -260,27 +276,40 @@ impl LoanCalcGui {
         let chart_height = self.params.chart_height;
         let caption_font_size = self.params.font_size;
         let label_font_size = (self.params.font_size as f32 * 0.75) as u32;
+        let stacked = self.stacked_chart;
 
         let equity_color = RGBColor(46, 204, 113);
         let bank_color = RGBColor(231, 76, 60);
         let text_color = BLACK;
 
-        let final_equity = schedule.equity.last().copied().unwrap_or(0.0);
-        let final_bank = schedule.interest_paid.last().copied().unwrap_or(0.0);
-        let bank_share = if final_equity + final_bank > 0.0 {
-            final_bank / (final_equity + final_bank) * 100.0
+        // Mode-dependent title and y_max
+        let (title, y_max) = if stacked {
+            let final_hv = schedule.home_value.last().copied().unwrap_or(0.0);
+            let final_equity = schedule.equity.last().copied().unwrap_or(0.0);
+            let equity_pct = if final_hv > 0.0 { final_equity / final_hv * 100.0 } else { 0.0 };
+            let t = format!(
+                "{}\nOwnership: {:.1}% yours at year 30\nHome: ${} | Down: {}% | Rate: {}%",
+                name, equity_pct,
+                self.params.home_price as u64,
+                self.params.down_payment_percent,
+                self.params.interest_rate
+            );
+            (t, (final_hv * 1.1).ceil() as f64)
         } else {
-            0.0
+            let final_equity = schedule.equity.last().copied().unwrap_or(0.0);
+            let final_bank = schedule.interest_paid.last().copied().unwrap_or(0.0);
+            let bank_share = if final_equity + final_bank > 0.0 {
+                final_bank / (final_equity + final_bank) * 100.0
+            } else { 0.0 };
+            let t = format!(
+                "{}\nBank Share: {:.1}%\nHome: ${} | Down: {}% | Rate: {}%",
+                name, bank_share,
+                self.params.home_price as u64,
+                self.params.down_payment_percent,
+                self.params.interest_rate
+            );
+            (t, (final_equity.max(final_bank) * 1.1).ceil() as f64)
         };
-        let y_max = (final_equity.max(final_bank) * 1.1).ceil() as f64;
-
-        let title = format!(
-            "{}\nBank Share: {:.1}%\nHome: ${} | Down: {}% | Rate: {}%",
-            name, bank_share,
-            self.params.home_price as u64,
-            self.params.down_payment_percent,
-            self.params.interest_rate
-        );
 
         let mut buffer = vec![0u8; (chart_width * chart_height * 3) as usize];
         {
@@ -305,31 +334,64 @@ impl LoanCalcGui {
                 .y_label_formatter(&|x| format!("${:.0}K", x / 1000.0))
                 .draw().unwrap();
 
-            let equity_points: Vec<(f64, f64)> = schedule.years.iter()
-                .zip(schedule.equity.iter())
-                .map(|(x, y)| (*x, *y))
-                .collect();
+            if stacked {
+                // Stacked view: equity (green, bottom) + loan balance (red, top) = home value.
+                // Drawn with painter's algorithm: red fills 0→home_value first, then green
+                // masks 0→equity, leaving red visible only in the equity→home_value band.
+                let home_value_pts: Vec<(f64, f64)> = schedule.years.iter()
+                    .zip(schedule.home_value.iter())
+                    .map(|(x, y)| (*x, *y))
+                    .collect();
+                let equity_pts: Vec<(f64, f64)> = schedule.years.iter()
+                    .zip(schedule.equity.iter())
+                    .map(|(x, y)| (*x, *y))
+                    .collect();
 
-            chart.draw_series(AreaSeries::new(
-                equity_points.clone(), 0.0, equity_color.mix(0.3),
-            )).unwrap();
-            chart.draw_series(LineSeries::new(
-                equity_points, equity_color.stroke_width(3),
-            )).unwrap().label("Your Equity")
-            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], equity_color.stroke_width(3)));
+                // Red band (loan balance = home_value − equity)
+                chart.draw_series(AreaSeries::new(
+                    home_value_pts.clone(), 0.0, bank_color.mix(0.45),
+                )).unwrap();
+                chart.draw_series(LineSeries::new(
+                    home_value_pts, bank_color.stroke_width(2),
+                )).unwrap().label("Home Value (Bank + Yours)")
+                .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], bank_color.stroke_width(3)));
 
-            let bank_points: Vec<(f64, f64)> = schedule.years.iter()
-                .zip(schedule.interest_paid.iter())
-                .map(|(x, y)| (*x, *y))
-                .collect();
+                // Green band (equity) masks bottom portion
+                chart.draw_series(AreaSeries::new(
+                    equity_pts.clone(), 0.0, equity_color.mix(0.75),
+                )).unwrap();
+                chart.draw_series(LineSeries::new(
+                    equity_pts, equity_color.stroke_width(3),
+                )).unwrap().label("Your Equity")
+                .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], equity_color.stroke_width(3)));
+            } else {
+                // Overlay view: equity vs cumulative interest, both from zero
+                let equity_points: Vec<(f64, f64)> = schedule.years.iter()
+                    .zip(schedule.equity.iter())
+                    .map(|(x, y)| (*x, *y))
+                    .collect();
 
-            chart.draw_series(AreaSeries::new(
-                bank_points.clone(), 0.0, bank_color.mix(0.3),
-            )).unwrap();
-            chart.draw_series(LineSeries::new(
-                bank_points, bank_color.stroke_width(3),
-            )).unwrap().label("Bank's Profit")
-            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], bank_color.stroke_width(3)));
+                chart.draw_series(AreaSeries::new(
+                    equity_points.clone(), 0.0, equity_color.mix(0.3),
+                )).unwrap();
+                chart.draw_series(LineSeries::new(
+                    equity_points, equity_color.stroke_width(3),
+                )).unwrap().label("Your Equity")
+                .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], equity_color.stroke_width(3)));
+
+                let bank_points: Vec<(f64, f64)> = schedule.years.iter()
+                    .zip(schedule.interest_paid.iter())
+                    .map(|(x, y)| (*x, *y))
+                    .collect();
+
+                chart.draw_series(AreaSeries::new(
+                    bank_points.clone(), 0.0, bank_color.mix(0.3),
+                )).unwrap();
+                chart.draw_series(LineSeries::new(
+                    bank_points, bank_color.stroke_width(3),
+                )).unwrap().label("Bank's Profit")
+                .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], bank_color.stroke_width(3)));
+            }
 
             chart.configure_series_labels()
                 .background_style(WHITE.mix(0.8))
@@ -515,6 +577,72 @@ impl eframe::App for LoanCalcGui {
                         ).changed() {
                             self.regenerate_chart = true;
                         }
+
+                        // Chart style toggle
+                        ui.add_space(6.0);
+                        ui.label("Chart Style:");
+                        ui.horizontal(|ui| {
+                            if ui.selectable_label(!self.stacked_chart, "Overlay").clicked()
+                                && self.stacked_chart
+                            {
+                                self.stacked_chart = false;
+                                self.chart_textures.clear();
+                            }
+                            if ui.selectable_label(self.stacked_chart, "Stacked").clicked()
+                                && !self.stacked_chart
+                            {
+                                self.stacked_chart = true;
+                                self.chart_textures.clear();
+                            }
+                        });
+                        ui.label(egui::RichText::new(if self.stacked_chart {
+                            "Equity vs loan balance = home value"
+                        } else {
+                            "Your equity vs interest paid to bank"
+                        }).small().weak());
+                    });
+
+                    ui.add_space(10.0);
+
+                    // Monthly costs beyond P&I
+                    ui.group(|ui| {
+                        ui.heading("Monthly Costs");
+                        ui.add_space(5.0);
+
+                        ui.label("Property Tax:");
+                        ui.add(egui::Slider::new(&mut self.params.property_tax_rate, 0.0..=3.0)
+                            .step_by(0.1)
+                            .suffix("% /yr")
+                            .show_value(true));
+
+                        ui.label("Home Insurance:");
+                        ui.add(egui::Slider::new(&mut self.params.insurance_rate, 0.0..=5.0)
+                            .step_by(0.1)
+                            .suffix("% /yr")
+                            .show_value(true));
+
+                        let pmi_label = if self.params.down_payment_percent < 20.0 {
+                            "PMI:"
+                        } else {
+                            "PMI (N/A — down ≥20%):"
+                        };
+                        ui.label(pmi_label);
+                        ui.add(egui::Slider::new(&mut self.params.pmi_rate, 0.0..=2.0)
+                            .step_by(0.05)
+                            .suffix("% /yr")
+                            .show_value(true));
+
+                        ui.label("Monthly HOA:");
+                        ui.add(egui::Slider::new(&mut self.params.monthly_hoa, 0.0..=1000.0)
+                            .step_by(25.0)
+                            .prefix("$")
+                            .show_value(true));
+
+                        ui.label("Closing Costs:");
+                        ui.add(egui::Slider::new(&mut self.params.closing_cost_percent, 0.5..=6.0)
+                            .step_by(0.25)
+                            .suffix("% of loan")
+                            .show_value(true));
                     });
 
                     ui.add_space(10.0);
@@ -542,22 +670,74 @@ impl eframe::App for LoanCalcGui {
                         if !self.scenarios.is_empty() {
                             ui.add_space(5.0);
 
-                            if let Some(base) = self.scenarios.get("Base Case") {
+                            let base = self.scenarios.get("Base Case")
+                                .or_else(|| self.scenarios.values().next());
+
+                            if let Some(base) = base {
                                 let equity = base.equity.last().copied().unwrap_or(0.0) / 1000.0;
                                 let bank = base.interest_paid.last().copied().unwrap_or(0.0) / 1000.0;
                                 let share = if equity + bank > 0.0 { bank / (equity + bank) * 100.0 } else { 0.0 };
 
-                                ui.label(format!("Equity: ${:.0}K", equity));
-                                ui.label(format!("Bank: ${:.0}K", bank));
-                                ui.label(format!("Bank Share: {:.1}%", share));
+                                ui.label(format!("30yr Equity: ${:.0}K", equity));
+                                ui.label(format!("30yr Bank:   ${:.0}K  ({:.1}%)", bank, share));
+
+                                ui.add_space(6.0);
+                                ui.label(egui::RichText::new("Monthly Breakdown (Base):").strong());
+
+                                let hp = self.params.home_price as f64;
+                                let dp_pct = self.params.down_payment_percent as f64;
+                                let loan_amt = hp * (1.0 - dp_pct / 100.0);
+
+                                let mo_pi  = base.monthly_payment;
+                                let mo_tax = hp * self.params.property_tax_rate as f64 / 100.0 / 12.0;
+                                let mo_ins = hp * self.params.insurance_rate as f64 / 100.0 / 12.0;
+                                let mo_pmi = if dp_pct < 20.0 {
+                                    loan_amt * self.params.pmi_rate as f64 / 100.0 / 12.0
+                                } else { 0.0 };
+                                let mo_hoa = self.params.monthly_hoa as f64;
+                                let mo_total = mo_pi + mo_tax + mo_ins + mo_pmi + mo_hoa;
+
+                                ui.label(format!("  P&I:   ${:.0}/mo", mo_pi));
+                                ui.label(format!("  Tax:   ${:.0}/mo", mo_tax));
+                                ui.label(format!("  Insur: ${:.0}/mo", mo_ins));
+                                if mo_pmi > 0.0 {
+                                    ui.label(format!("  PMI:   ${:.0}/mo", mo_pmi));
+                                }
+                                if mo_hoa > 0.0 {
+                                    ui.label(format!("  HOA:   ${:.0}/mo", mo_hoa));
+                                }
+                                ui.label(egui::RichText::new(
+                                    format!("  TOTAL: ${:.0}/mo", mo_total)
+                                ).strong());
+
+                                ui.add_space(6.0);
+                                ui.label(egui::RichText::new("Cash to Close:").strong());
+                                let down_payment = hp * dp_pct / 100.0;
+                                let closing_costs = loan_amt * self.params.closing_cost_percent as f64 / 100.0;
+                                let cash_to_close = down_payment + closing_costs;
+                                ui.label(format!("  Down:    ${:.0}", down_payment));
+                                ui.label(format!("  Closing: ${:.0}", closing_costs));
+                                ui.label(egui::RichText::new(
+                                    format!("  TOTAL:   ${:.0}", cash_to_close)
+                                ).strong());
                             }
                         }
 
                         ui.add_space(10.0);
 
-                        if ui.button("📥 Export CSV").clicked() {
-                            self.export_csv();
-                        }
+                        ui.horizontal(|ui| {
+                            if ui.button("📥 Export CSV").clicked() {
+                                self.export_csv();
+                            }
+                            let tbl_label = if self.show_amort_table {
+                                "📊 Hide Table"
+                            } else {
+                                "📊 Show Table"
+                            };
+                            if ui.button(tbl_label).clicked() {
+                                self.show_amort_table = !self.show_amort_table;
+                            }
+                        });
                     });
 
                     ui.add_space(10.0);
@@ -591,6 +771,70 @@ impl eframe::App for LoanCalcGui {
                     });
                 }); // end controls ScrollArea
             }); // end SidePanel
+
+        // Amortization table panel — declared before CentralPanel so egui lays it out first
+        if self.show_amort_table {
+            egui::SidePanel::right("amort_table_panel")
+                .resizable(true)
+                .default_width(480.0)
+                .min_width(380.0)
+                .show(ctx, |ui| {
+                    ui.heading("Amortization Schedule");
+                    if let Some(sched) = self.scenarios.get(&self.selected_tab) {
+                        ui.label(format!(
+                            "{}  —  ${:.0}/mo P&I",
+                            self.selected_tab, sched.monthly_payment
+                        ));
+                    }
+                    ui.separator();
+
+                    if let Some(schedule) = self.scenarios.get(&self.selected_tab).cloned() {
+                        let loan_amount = self.params.home_price as f64
+                            * (1.0 - self.params.down_payment_percent as f64 / 100.0);
+                        let n = schedule.months.len();
+
+                        TableBuilder::new(ui)
+                            .striped(true)
+                            .resizable(false)
+                            .column(Column::exact(36.0))   // Mo
+                            .column(Column::exact(76.0))   // Balance
+                            .column(Column::exact(68.0))   // Principal
+                            .column(Column::exact(68.0))   // Interest
+                            .column(Column::exact(76.0))   // Cum. Int
+                            .column(Column::exact(72.0))   // Equity
+                            .column(Column::remainder())   // Home Val
+                            .header(18.0, |mut header| {
+                                header.col(|ui| { ui.strong("Mo"); });
+                                header.col(|ui| { ui.strong("Balance"); });
+                                header.col(|ui| { ui.strong("Princ."); });
+                                header.col(|ui| { ui.strong("Int."); });
+                                header.col(|ui| { ui.strong("Cum.Int"); });
+                                header.col(|ui| { ui.strong("Equity"); });
+                                header.col(|ui| { ui.strong("Home Val"); });
+                            })
+                            .body(|body| {
+                                body.rows(16.0, n, |mut row| {
+                                    let i = row.index();
+                                    let prev_bal = if i == 0 { loan_amount } else { schedule.balance[i - 1] };
+                                    let balance = schedule.balance[i];
+                                    let mo_principal = prev_bal - balance;
+                                    let mo_interest = schedule.interest_paid[i]
+                                        - if i > 0 { schedule.interest_paid[i - 1] } else { 0.0 };
+
+                                    row.col(|ui| { ui.label(format!("{}", schedule.months[i])); });
+                                    row.col(|ui| { ui.label(format!("${:.0}", balance)); });
+                                    row.col(|ui| { ui.label(format!("${:.0}", mo_principal)); });
+                                    row.col(|ui| { ui.label(format!("${:.0}", mo_interest)); });
+                                    row.col(|ui| { ui.label(format!("${:.0}", schedule.interest_paid[i])); });
+                                    row.col(|ui| { ui.label(format!("${:.0}", schedule.equity[i])); });
+                                    row.col(|ui| { ui.label(format!("${:.0}", schedule.home_value[i])); });
+                                });
+                            });
+                    } else {
+                        ui.label("No data — enable a scenario above.");
+                    }
+                });
+        }
 
         // Chart panel — CentralPanel fills all remaining space, giving ScrollArea full height
         egui::CentralPanel::default().show(ctx, |ui| {
