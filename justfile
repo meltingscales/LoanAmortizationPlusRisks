@@ -12,6 +12,14 @@ run:
 run-release:
     cargo run --release
 
+# Run interactive GUI with sliders
+run-gui:
+    cargo run --bin loan-calc-gui --features gui
+
+# Run GUI (release mode)
+run-gui-release:
+    cargo run --bin loan-calc-gui --features gui --release
+
 # Build release binary
 build:
     cargo build --release
