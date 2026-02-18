@@ -6,6 +6,7 @@
 use eframe::egui;
 use plotters::prelude::*;
 use std::collections::HashMap;
+use itertools::Itertools;
 
 /// Amortization schedule data
 #[derive(Debug, Clone)]
@@ -433,9 +434,12 @@ impl eframe::App for LoanCalcGui {
 
             // Split into controls (left) and chart (right)
             ui.horizontal(|ui| {
-                // Controls panel - fixed width
-                ui.vertical(|ui| {
-                    ui.set_width(300.0);
+                // Controls panel - fixed width, scrollable
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .max_width(300.0)
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
 
                     ui.group(|ui| {
                         ui.heading("Loan Parameters");
@@ -568,16 +572,53 @@ impl eframe::App for LoanCalcGui {
                                 ui.label(format!("Bank Share: {:.1}%", share));
                             }
                         }
+
+                        ui.add_space(10.0);
+
+                        // Export button
+                        if ui.button("📥 Export CSV").clicked() {
+                            self.export_csv();
+                            ui.label("CSV files exported!");
+                        }
                     });
 
                     ui.add_space(10.0);
 
-                    // Export button
-                    if ui.button("📥 Export CSV").clicked() {
-                        self.export_csv();
-                        ui.label("CSV files exported!");
-                    }
-                });
+                    // Open CSV buttons
+                    ui.group(|ui| {
+                        ui.heading("Open CSV Files");
+
+                        for (name, _) in self.scenarios.iter().sorted_by_key(|a| a.0) {
+                            let filename: String = format!("loan_gui_{}.csv",
+                                name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "_"));
+
+                            if ui.button(format!("📄 {}", name)).clicked() {
+                                #[cfg(target_os = "linux")]
+                                {
+                                    use std::process::Command;
+                                    let _ = Command::new("xdg-open")
+                                        .arg(&filename)
+                                        .spawn();
+                                }
+                                #[cfg(target_os = "macos")]
+                                {
+                                    use std::process::Command;
+                                    let _ = Command::new("open")
+                                        .arg(&filename)
+                                        .spawn();
+                                }
+                                #[cfg(target_os = "windows")]
+                                {
+                                    use std::process::Command;
+                                    let _ = Command::new("cmd")
+                                        .args(["/c", "start", "", &filename])
+                                        .spawn();
+                                }
+                            }
+                        }
+                    });
+                }); // closes ui.vertical inside ScrollArea
+                }); // end ScrollArea
 
                 // Chart display - remaining space
                 ui.vertical(|ui| {
@@ -607,8 +648,8 @@ impl eframe::App for LoanCalcGui {
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1400.0, 900.0])
-            .with_min_inner_size([1000.0, 600.0])
+            .with_inner_size([1300.0, 720.0])
+            .with_min_inner_size([900.0, 560.0])
             .with_title("Loan Amortization Calculator - Interactive"),
         ..Default::default()
     };

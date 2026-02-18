@@ -6,11 +6,11 @@ default:
 
 # Build and run (debug mode - faster compile)
 run:
-    cargo run
+    cargo run --bin loan-calc
 
 # Build and run (release mode - optimized)
 run-release:
-    cargo run --release
+    cargo run --bin loan-calc --release
 
 # Run interactive GUI with sliders
 run-gui:
