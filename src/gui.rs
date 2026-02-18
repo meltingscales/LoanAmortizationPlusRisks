@@ -124,6 +124,9 @@ struct LoanParams {
     interest_rate: f32,
     loan_term_years: u32,
     appreciation_rate: f32,
+    chart_width: u32,
+    chart_height: u32,
+    font_size: u32,
 }
 
 impl Default for LoanParams {
@@ -134,6 +137,9 @@ impl Default for LoanParams {
             interest_rate: 6.5,
             loan_term_years: 30,
             appreciation_rate: 3.0,
+            chart_width: 2400,
+            chart_height: 1600,
+            font_size: 28,
         }
     }
 }
@@ -245,10 +251,15 @@ impl LoanCalcGui {
             return;
         }
 
+        let chart_width = self.params.chart_width;
+        let chart_height = self.params.chart_height;
+        let caption_font_size = self.params.font_size;
+        let label_font_size = (self.params.font_size as f32 * 0.75) as u32;
+
         // Create in-memory chart
-        let mut buffer = vec![0u8; 2400 * 1600 * 3];
+        let mut buffer = vec![0u8; (chart_width * chart_height * 3) as usize];
         {
-            let root = BitMapBackend::with_buffer(&mut buffer, (2400, 1600)).into_drawing_area();
+            let root = BitMapBackend::with_buffer(&mut buffer, (chart_width, chart_height)).into_drawing_area();
             root.fill(&WHITE).unwrap();
 
             let equity_color = RGBColor(46, 204, 113);
@@ -292,7 +303,7 @@ impl LoanCalcGui {
                     .margin_right(20)
                     .margin_top(50)
                     .margin_bottom(40)
-                    .caption(&title, ("sans-serif", 28).into_font().with_color(&text_color))
+                    .caption(&title, ("sans-serif", caption_font_size).into_font().with_color(&text_color))
                     .x_label_area_size(40)
                     .y_label_area_size(70)
                     .build_cartesian_2d(0f64..30f64, 0f64..y_max).unwrap();
@@ -300,8 +311,8 @@ impl LoanCalcGui {
                 chart.configure_mesh()
                     .x_desc("Years")
                     .y_desc("Amount ($)")
-                    .x_label_style(("sans-serif", 22).into_font())
-                    .y_label_style(("sans-serif", 22).into_font())
+                    .x_label_style(("sans-serif", label_font_size).into_font())
+                    .y_label_style(("sans-serif", label_font_size).into_font())
                     .y_label_formatter(&|x| format!("${:.0}K", x / 1000.0))
                     .draw().unwrap();
 
@@ -352,7 +363,7 @@ impl LoanCalcGui {
         // Convert to image texture
         self.chart_texture = Some(ctx.load_texture(
             "chart",
-            egui::ColorImage::from_rgb([2400, 1600], &buffer),
+            egui::ColorImage::from_rgb([chart_width as usize, chart_height as usize], &buffer),
             egui::TextureOptions::LINEAR,
         ));
 
@@ -476,6 +487,43 @@ impl eframe::App for LoanCalcGui {
                         if ui.add(egui::Slider::new(&mut self.params.appreciation_rate, 0.0..=10.0)
                             .step_by(0.5)
                             .suffix("%/year")
+                            .show_value(true)
+                        ).changed() {
+                            self.regenerate_chart = true;
+                        }
+
+                        ui.add_space(10.0);
+                        ui.separator();
+                        ui.add_space(10.0);
+
+                        // Chart Size
+                        ui.label("Chart Size:");
+
+                        ui.horizontal(|ui| {
+                            ui.label("W:");
+                            if ui.add(egui::Slider::new(&mut self.params.chart_width, 800..=4000)
+                                .step_by(100.0)
+                                .suffix(" px")
+                                .show_value(true)
+                            ).changed() {
+                                self.regenerate_chart = true;
+                            }
+
+                            ui.label("H:");
+                            if ui.add(egui::Slider::new(&mut self.params.chart_height, 600..=3000)
+                                .step_by(100.0)
+                                .suffix(" px")
+                                .show_value(true)
+                            ).changed() {
+                                self.regenerate_chart = true;
+                            }
+                        });
+
+                        // Font Size
+                        ui.label("Font Size:");
+                        if ui.add(egui::Slider::new(&mut self.params.font_size, 12..=48)
+                            .step_by(2.0)
+                            .suffix(" px")
                             .show_value(true)
                         ).changed() {
                             self.regenerate_chart = true;
