@@ -424,8 +424,9 @@ impl eframe::App for LoanCalcGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Left controls panel — SidePanel claims its space before CentralPanel
         egui::SidePanel::left("controls_panel")
-            .resizable(false)
-            .exact_width(300.0)
+            .resizable(true)
+            .default_width(340.0)
+            .min_width(260.0)
             .show(ctx, |ui| {
                 ui.heading("🏠 Loan Calculator");
                 ui.separator();
