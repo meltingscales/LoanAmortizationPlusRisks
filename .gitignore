@@ -2,3 +2,4 @@
 *.png
 output_summary.txt
 loan_data.json
+*.csv

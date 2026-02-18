@@ -39,7 +39,12 @@ update:
 # Clean build artifacts
 clean:
     cargo clean
-    rm -f *.png output_summary.txt loan_data.json
+    rm -f *.png loan_*.csv output_summary.txt loan_data.json
+
+# Open the generated chart and CSV files
+show:
+    xdg-open loan_comparison.png
+    @ls -1 loan_*.csv 2>/dev/null | head -1 | xargs -r xdg-open
 
 # Install cargo-edit for dependency management
 install-tools:

@@ -26,7 +26,7 @@ disaster_cost_total = 40000          # Total disaster costs (hurricane + flood)
 
 [display]
 # Chart settings - dimensions in pixels
-chart_width = 1800
-chart_height = 1200
+chart_width = 2400
+chart_height = 1600
 output_file = "loan_comparison.png"
 show_grid = true

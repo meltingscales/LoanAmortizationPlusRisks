@@ -66,8 +66,14 @@ fn default_true() -> bool { true }
 #[derive(Debug, Clone)]
 struct AmortizationSchedule {
     years: Vec<f64>,
+    months: Vec<u32>,
+    balance: Vec<f64>,
     equity: Vec<f64>,
+    principal_paid: Vec<f64>,
     interest_paid: Vec<f64>,
+    total_paid: Vec<f64>,
+    home_value: Vec<f64>,
+    monthly_payment: f64,
 }
 
 /// Loan calculator
@@ -107,12 +113,13 @@ impl LoanCalculator {
         let num_payments = self.loan_term_years as usize * 12;
 
         // Calculate monthly payment
-        let monthly_payment = if monthly_rate > 0.0 {
+        let base_monthly_payment = if monthly_rate > 0.0 {
             self.loan_amount * (monthly_rate * (1.0 + monthly_rate).powi(num_payments as i32))
                 / ((1.0 + monthly_rate).powi(num_payments as i32) - 1.0)
         } else {
             self.loan_amount / num_payments as f64
-        } + extra_monthly;
+        };
+        let monthly_payment = base_monthly_payment + extra_monthly;
 
         let mut balance = self.loan_amount;
         let mut home_value = self.home_price;
@@ -120,8 +127,13 @@ impl LoanCalculator {
         let mut cumulative_interest = 0.0;
 
         let mut years = Vec::with_capacity(num_payments);
+        let mut months = Vec::with_capacity(num_payments);
+        let mut balances = Vec::with_capacity(num_payments);
         let mut equity = Vec::with_capacity(num_payments);
+        let mut principal_paid = Vec::with_capacity(num_payments);
         let mut interest_paid = Vec::with_capacity(num_payments);
+        let mut total_paid = Vec::with_capacity(num_payments);
+        let mut home_values = Vec::with_capacity(num_payments);
 
         for month in 1..=num_payments {
             let interest_payment = balance * monthly_rate;
@@ -139,14 +151,25 @@ impl LoanCalculator {
             let current_equity = cumulative_principal + (home_value - self.home_price);
 
             years.push(month as f64 / 12.0);
+            months.push(month as u32);
+            balances.push(balance);
             equity.push(current_equity);
+            principal_paid.push(cumulative_principal);
             interest_paid.push(cumulative_interest);
+            total_paid.push(cumulative_principal + cumulative_interest);
+            home_values.push(home_value);
         }
 
         AmortizationSchedule {
             years,
+            months,
+            balance: balances,
             equity,
+            principal_paid,
             interest_paid,
+            total_paid,
+            home_value: home_values,
+            monthly_payment,
         }
     }
 }
@@ -230,6 +253,54 @@ fn calculate_scenarios(config: &Config) -> HashMap<String, AmortizationSchedule>
     scenarios
 }
 
+/// Export amortization schedule to CSV
+fn export_csv(schedule: &AmortizationSchedule, config: &Config, scenario_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let filename = format!("loan_{}.csv", scenario_name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "_"));
+
+    let mut csv = String::from("Month,Year,Balance,Principal_Paid,Interest_Paid,Total_Paid,Equity,Home_Value,Bank_Share_Percent\n");
+
+    for i in 0..schedule.months.len() {
+        let month = schedule.months[i];
+        let year = schedule.years[i];
+        let balance = schedule.balance[i];
+        let principal = schedule.principal_paid[i];
+        let interest = schedule.interest_paid[i];
+        let total = schedule.total_paid[i];
+        let equity = schedule.equity[i];
+        let home_value = schedule.home_value[i];
+
+        let bank_share = if equity + total > 0.0 {
+            (interest / (equity + interest)) * 100.0
+        } else {
+            0.0
+        };
+
+        csv.push_str(&format!("{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2}\n",
+            month, year, balance, principal, interest, total, equity, home_value, bank_share));
+    }
+
+    // Add summary row
+    let final_equity = schedule.equity.last().copied().unwrap_or(0.0);
+    let final_bank = schedule.interest_paid.last().copied().unwrap_or(0.0);
+    let total_cost = final_equity + final_bank;
+
+    csv.push_str(&format!("\nSUMMARY\n"));
+    csv.push_str(&format!("Home_Price,${}\n", config.loan.home_price));
+    csv.push_str(&format!("Down_Payment,${}\n", config.loan.home_price * config.loan.down_payment_percent / 100.0));
+    csv.push_str(&format!("Loan_Amount,${}\n", config.loan.home_price * (1.0 - config.loan.down_payment_percent / 100.0)));
+    csv.push_str(&format!("Interest_Rate,{}%\n", config.loan.interest_rate));
+    csv.push_str(&format!("Loan_Term,{} years\n", config.loan.loan_term_years));
+    csv.push_str(&format!("Monthly_Payment,${:.2}\n", schedule.monthly_payment));
+    csv.push_str(&format!("Total_Equity,${:.2}\n", final_equity));
+    csv.push_str(&format!("Total_Bank_Profit,${:.2}\n", final_bank));
+    csv.push_str(&format!("Total_Cost,${:.2}\n", total_cost));
+
+    fs::write(&filename, csv)?;
+    println!("  CSV saved to: {}", filename);
+
+    Ok(())
+}
+
 /// Generate comparison chart using plotters
 fn generate_chart(config: &Config, scenarios: &HashMap<String, AmortizationSchedule>) -> Result<(), Box<dyn std::error::Error>> {
     let output_path = &config.display.output_file;
@@ -243,7 +314,7 @@ fn generate_chart(config: &Config, scenarios: &HashMap<String, AmortizationSched
 
     let n_scenarios = scenarios.len();
     let n_cols = 3.min(n_scenarios);
-    let n_rows = (n_scenarios + n_cols - 1) / n_cols + 1; // +1 for summary
+    let n_rows = (n_scenarios + n_cols - 1) / n_cols;
 
     let areas = root.split_evenly((n_rows, n_cols));
 
@@ -252,8 +323,6 @@ fn generate_chart(config: &Config, scenarios: &HashMap<String, AmortizationSched
     scenario_data.sort_by_key(|(k, _)| *k);
 
     for (idx, (name, schedule)) in scenario_data.iter().enumerate() {
-        if idx >= areas.len() - 1 { break; } // Reserve last row for summary
-
         let area = &areas[idx];
         let final_equity = schedule.equity.last().copied().unwrap_or(0.0);
         let final_bank = schedule.interest_paid.last().copied().unwrap_or(0.0);
@@ -266,15 +335,19 @@ fn generate_chart(config: &Config, scenarios: &HashMap<String, AmortizationSched
         let max_value = final_equity.max(final_bank);
         let y_max = (max_value * 1.1).ceil() as f64;
 
+        // Build title with parameters
+        let title = format!(
+            "{}\nBank Share: {:.1}%\nHome: ${} | Down: {}% | Rate: {}%",
+            name, bank_share, config.loan.home_price,
+            config.loan.down_payment_percent, config.loan.interest_rate
+        );
+
         let mut chart = ChartBuilder::on(area)
             .margin_left(60)
             .margin_right(20)
-            .margin_top(40)
+            .margin_top(50)
             .margin_bottom(40)
-            .caption(
-                &format!("{}\nBank Share: {:.1}%", name, bank_share),
-                ("sans-serif", 20).into_font().with_color(&text_color),
-            )
+            .caption(&title, ("sans-serif", 14).into_font().with_color(&text_color))
             .x_label_area_size(40)
             .y_label_area_size(70)
             .build_cartesian_2d(0f64..30f64, 0f64..y_max)?;
@@ -282,8 +355,8 @@ fn generate_chart(config: &Config, scenarios: &HashMap<String, AmortizationSched
         chart.configure_mesh()
             .x_desc("Years")
             .y_desc("Amount ($)")
-            .x_label_style(("sans-serif", 12).into_font())
-            .y_label_style(("sans-serif", 12).into_font())
+            .x_label_style(("sans-serif", 11).into_font())
+            .y_label_style(("sans-serif", 11).into_font())
             .y_label_formatter(&|x| format!("${:.0}K", x / 1000.0))
             .draw()?;
 
@@ -330,8 +403,6 @@ fn generate_chart(config: &Config, scenarios: &HashMap<String, AmortizationSched
             .draw()?;
     }
 
-    // Note: Last area left blank - summary printed to console instead
-
     root.present()?;
     Ok(())
 }
@@ -360,6 +431,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate chart
     println!("\nGenerating chart...");
     generate_chart(&config, &scenarios)?;
+
+    // Export CSV files
+    println!("\nExporting CSV files...");
+    for (name, schedule) in &scenarios {
+        export_csv(schedule, &config, name)?;
+    }
 
     // Print summary
     println!("\n═══════════════════════════════════════════════");
