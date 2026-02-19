@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            cli_bin: loan-calc
+            gui_bin: loan-calc-gui
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cli_bin: loan-calc.exe
+            gui_bin: loan-calc-gui.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            cli_bin: loan-calc
+            gui_bin: loan-calc-gui
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libssl-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build CLI binary
+        run: cargo build --release --bin loan-calc --target ${{ matrix.target }}
+
+      - name: Build GUI binary
+        run: cargo build --release --bin loan-calc-gui --features gui --target ${{ matrix.target }}
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: loan-calc-${{ matrix.os }}
+          path: target/${{ matrix.target }}/release/${{ matrix.cli_bin }}
+
+      - name: Upload GUI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: loan-calc-gui-${{ matrix.os }}
+          path: target/${{ matrix.target }}/release/${{ matrix.gui_bin }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage release files
+        run: |
+          mkdir release-files
+          cp artifacts/loan-calc-ubuntu-latest/loan-calc      release-files/loan-calc-linux
+          cp artifacts/loan-calc-windows-latest/loan-calc.exe  release-files/loan-calc-windows.exe
+          cp artifacts/loan-calc-macos-latest/loan-calc        release-files/loan-calc-macos
+          cp artifacts/loan-calc-gui-ubuntu-latest/loan-calc-gui      release-files/loan-calc-gui-linux
+          cp artifacts/loan-calc-gui-windows-latest/loan-calc-gui.exe  release-files/loan-calc-gui-windows.exe
+          cp artifacts/loan-calc-gui-macos-latest/loan-calc-gui        release-files/loan-calc-gui-macos
+          chmod +x release-files/loan-calc-linux release-files/loan-calc-macos \
+                   release-files/loan-calc-gui-linux release-files/loan-calc-gui-macos
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          generate_release_notes: true
