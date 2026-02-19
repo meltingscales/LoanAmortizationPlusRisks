@@ -23,6 +23,18 @@ struct AmortizationSchedule {
     monthly_payment: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum ItemType { Income, Expense }
+
+#[derive(Debug, Clone)]
+struct IncomeExpenseItem {
+    item_type: ItemType,
+    note: String,
+    cost_per_month: f64,
+    jitter_plus: f64,
+    jitter_minus: f64,
+}
+
 /// Loan calculator
 struct LoanCalculator {
     home_price: f64,
@@ -179,6 +191,8 @@ struct LoanCalcGui {
     regenerate_chart: bool,
     show_amort_table: bool,
     stacked_chart: bool,
+    budget_items: Vec<IncomeExpenseItem>,
+    show_budget_window: bool,
 }
 
 impl LoanCalcGui {
@@ -200,6 +214,8 @@ impl LoanCalcGui {
             regenerate_chart: true,
             show_amort_table: false,
             stacked_chart: false,
+            budget_items: vec![],
+            show_budget_window: false,
         }
     }
 
@@ -512,6 +528,267 @@ impl LoanCalcGui {
 
             fs::write(&filename, csv).ok();
         }
+    }
+
+    /// Compute the base-case monthly PITI from current params.
+    fn monthly_piti(&self) -> f64 {
+        let hp = self.params.home_price as f64;
+        let dp_pct = self.params.down_payment_percent as f64;
+        let loan_amt = hp * (1.0 - dp_pct / 100.0);
+
+        let mo_pi = self.scenarios.get("Base Case")
+            .or_else(|| self.scenarios.values().next())
+            .map(|s| s.monthly_payment)
+            .unwrap_or_else(|| {
+                // Fallback: compute from params directly
+                let r = self.params.interest_rate as f64 / 100.0 / 12.0;
+                let n = (self.params.loan_term_years * 12) as i32;
+                if r > 0.0 {
+                    loan_amt * r * (1.0 + r).powi(n) / ((1.0 + r).powi(n) - 1.0)
+                } else {
+                    loan_amt / n as f64
+                }
+            });
+        let mo_tax = hp * self.params.property_tax_rate as f64 / 100.0 / 12.0;
+        let mo_ins = hp * self.params.insurance_rate as f64 / 100.0 / 12.0;
+        let mo_pmi = if dp_pct < 20.0 {
+            loan_amt * self.params.pmi_rate as f64 / 100.0 / 12.0
+        } else { 0.0 };
+        let mo_hoa = self.params.monthly_hoa as f64;
+        mo_pi + mo_tax + mo_ins + mo_pmi + mo_hoa
+    }
+
+    fn import_budget_csv(&mut self) {
+        let path = rfd::FileDialog::new()
+            .add_filter("CSV", &["csv"])
+            .pick_file();
+        let path = match path {
+            Some(p) => p,
+            None => return,
+        };
+        let content = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let fields: Vec<&str> = line.splitn(5, ',').collect();
+            if fields.len() < 5 {
+                continue;
+            }
+            // Skip header
+            if fields[0].trim().eq_ignore_ascii_case("type") {
+                continue;
+            }
+            let item_type = match fields[0].trim().to_lowercase().as_str() {
+                "income" => ItemType::Income,
+                "expense" => ItemType::Expense,
+                _ => continue,
+            };
+            let note = fields[1].trim().to_string();
+            let cost_per_month = fields[2].trim().parse::<f64>().unwrap_or(0.0);
+            let jitter_plus = fields[3].trim().parse::<f64>().unwrap_or(0.0);
+            let jitter_minus = fields[4].trim().parse::<f64>().unwrap_or(0.0);
+            self.budget_items.push(IncomeExpenseItem {
+                item_type,
+                note,
+                cost_per_month,
+                jitter_plus,
+                jitter_minus,
+            });
+        }
+    }
+
+    fn render_budget_window(&mut self, ctx: &egui::Context) {
+        use egui::DragValue;
+
+        let mut open = self.show_budget_window;
+        egui::Window::new("💰 Budget — Income & Expenses")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                // Table
+                let mut to_delete: Vec<usize> = vec![];
+                TableBuilder::new(ui)
+                    .striped(true)
+                    .resizable(false)
+                    .column(Column::exact(72.0))    // Type
+                    .column(Column::remainder())    // Note
+                    .column(Column::exact(90.0))    // $/mo
+                    .column(Column::exact(80.0))    // +Jitter
+                    .column(Column::exact(80.0))    // -Jitter
+                    .column(Column::exact(30.0))    // Del
+                    .header(18.0, |mut header| {
+                        header.col(|ui| { ui.strong("Type"); });
+                        header.col(|ui| { ui.strong("Note"); });
+                        header.col(|ui| { ui.strong("$/mo"); });
+                        header.col(|ui| { ui.strong("+Jitter"); });
+                        header.col(|ui| { ui.strong("-Jitter"); });
+                        header.col(|ui| { ui.strong(""); });
+                    })
+                    .body(|body| {
+                        let n = self.budget_items.len();
+                        body.rows(22.0, n, |mut row| {
+                            let i = row.index();
+                            row.col(|ui| {
+                                egui::ComboBox::from_id_salt(i)
+                                    .selected_text(match self.budget_items[i].item_type {
+                                        ItemType::Income  => "Income",
+                                        ItemType::Expense => "Expense",
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut self.budget_items[i].item_type,
+                                            ItemType::Income, "Income",
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.budget_items[i].item_type,
+                                            ItemType::Expense, "Expense",
+                                        );
+                                    });
+                            });
+                            row.col(|ui| {
+                                ui.text_edit_singleline(&mut self.budget_items[i].note);
+                            });
+                            row.col(|ui| {
+                                ui.add(DragValue::new(&mut self.budget_items[i].cost_per_month)
+                                    .prefix("$").speed(10.0).range(0.0..=f64::MAX));
+                            });
+                            row.col(|ui| {
+                                ui.add(DragValue::new(&mut self.budget_items[i].jitter_plus)
+                                    .prefix("+$").speed(5.0).range(0.0..=f64::MAX));
+                            });
+                            row.col(|ui| {
+                                ui.add(DragValue::new(&mut self.budget_items[i].jitter_minus)
+                                    .prefix("-$").speed(5.0).range(0.0..=f64::MAX));
+                            });
+                            row.col(|ui| {
+                                if ui.button("🗑").clicked() {
+                                    to_delete.push(i);
+                                }
+                            });
+                        });
+                    });
+
+                for i in to_delete.iter().rev() {
+                    self.budget_items.remove(*i);
+                }
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("➕ Add Row").clicked() {
+                        self.budget_items.push(IncomeExpenseItem {
+                            item_type: ItemType::Expense,
+                            note: String::new(),
+                            cost_per_month: 0.0,
+                            jitter_plus: 0.0,
+                            jitter_minus: 0.0,
+                        });
+                    }
+                    if ui.button("📂 Import CSV").clicked() {
+                        self.import_budget_csv();
+                    }
+                    if ui.button("🗑 Clear All").clicked() {
+                        self.budget_items.clear();
+                    }
+                });
+
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                // Compute scenario totals
+                let income_base: f64 = self.budget_items.iter()
+                    .filter(|it| it.item_type == ItemType::Income)
+                    .map(|it| it.cost_per_month).sum();
+                let income_opt: f64 = self.budget_items.iter()
+                    .filter(|it| it.item_type == ItemType::Income)
+                    .map(|it| it.cost_per_month + it.jitter_plus).sum();
+                let income_pes: f64 = self.budget_items.iter()
+                    .filter(|it| it.item_type == ItemType::Income)
+                    .map(|it| it.cost_per_month - it.jitter_minus).sum();
+
+                let expense_base: f64 = self.budget_items.iter()
+                    .filter(|it| it.item_type == ItemType::Expense)
+                    .map(|it| it.cost_per_month).sum();
+                let expense_pes: f64 = self.budget_items.iter()
+                    .filter(|it| it.item_type == ItemType::Expense)
+                    .map(|it| it.cost_per_month + it.jitter_plus).sum();
+                let expense_opt: f64 = self.budget_items.iter()
+                    .filter(|it| it.item_type == ItemType::Expense)
+                    .map(|it| it.cost_per_month - it.jitter_minus).sum();
+
+                let net_base = income_base - expense_base;
+                let net_pes  = income_pes  - expense_pes;
+                let net_opt  = income_opt  - expense_opt;
+
+                let piti = self.monthly_piti();
+
+                let after_base = net_base - piti;
+                let after_pes  = net_pes  - piti;
+                let after_opt  = net_opt  - piti;
+
+                let surplus_color = |v: f64| -> egui::Color32 {
+                    if v > 200.0      { egui::Color32::GREEN }
+                    else if v >= 0.0  { egui::Color32::YELLOW }
+                    else              { egui::Color32::RED }
+                };
+
+                egui::Grid::new("budget_summary_grid")
+                    .num_columns(4)
+                    .spacing([12.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("");
+                        ui.label(egui::RichText::new("Pessimistic").strong());
+                        ui.label(egui::RichText::new("Base").strong());
+                        ui.label(egui::RichText::new("Optimistic").strong());
+                        ui.end_row();
+
+                        ui.label("Net Income:");
+                        ui.label(format!("${:.0}", net_pes));
+                        ui.label(format!("${:.0}", net_base));
+                        ui.label(format!("${:.0}", net_opt));
+                        ui.end_row();
+
+                        ui.label("After PITI:");
+                        ui.label(egui::RichText::new(format!("${:.0}", after_pes)).color(surplus_color(after_pes)));
+                        ui.label(egui::RichText::new(format!("${:.0}", after_base)).color(surplus_color(after_base)));
+                        ui.label(egui::RichText::new(format!("${:.0}", after_opt)).color(surplus_color(after_opt)));
+                        ui.end_row();
+                    });
+
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                // Totals breakdown (base)
+                egui::Grid::new("budget_totals_grid")
+                    .num_columns(2)
+                    .spacing([12.0, 2.0])
+                    .show(ui, |ui| {
+                        ui.label("Total Income (base):");
+                        ui.label(format!("${:.0}/mo", income_base));
+                        ui.end_row();
+                        ui.label("Total Expenses (base):");
+                        ui.label(format!("${:.0}/mo", expense_base));
+                        ui.end_row();
+                        ui.label("Monthly PITI:");
+                        ui.label(format!("${:.0}/mo", piti));
+                        ui.end_row();
+                        let surplus = income_base - expense_base - piti;
+                        ui.label(egui::RichText::new("Net Surplus (base):").strong());
+                        ui.label(egui::RichText::new(format!("${:.0}/mo", surplus))
+                            .strong()
+                            .color(surplus_color(surplus)));
+                        ui.end_row();
+                    });
+            });
+        // If user closed the window via X button, sync state
+        self.show_budget_window = open;
     }
 }
 
@@ -1058,6 +1335,14 @@ impl eframe::App for LoanCalcGui {
                             if ui.button(tbl_label).clicked() {
                                 self.show_amort_table = !self.show_amort_table;
                             }
+                            let budget_label = if self.show_budget_window {
+                                "💰 Hide Budget"
+                            } else {
+                                "💰 Show Budget"
+                            };
+                            if ui.button(budget_label).clicked() {
+                                self.show_budget_window = !self.show_budget_window;
+                            }
                         });
                     });
 
@@ -1155,6 +1440,11 @@ impl eframe::App for LoanCalcGui {
                         ui.label("No data — enable a scenario above.");
                     }
                 });
+        }
+
+        // Budget window (floating, independent of panels)
+        if self.show_budget_window {
+            self.render_budget_window(ctx);
         }
 
         // Chart panel — CentralPanel fills all remaining space, giving ScrollArea full height

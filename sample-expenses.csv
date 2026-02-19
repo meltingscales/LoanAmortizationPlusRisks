@@ -1,0 +1,16 @@
+type,note,costPerMonth,jitterPlus,jitterMinus
+income,Primary Salary,8000,500,0
+income,Side Freelance,500,500,500
+expense,Groceries,600,100,50
+expense,Utilities (Electric/Gas/Water),250,75,25
+expense,Internet & Phone,150,20,0
+expense,Car Payment,450,0,0
+expense,Car Insurance,175,25,0
+expense,Gas / Transportation,200,80,40
+expense,Health Insurance,300,50,0
+expense,Subscriptions (Netflix/Spotify/etc),60,20,10
+expense,Dining Out / Entertainment,300,150,100
+expense,Clothing & Personal Care,100,75,25
+expense,Gym / Recreation,50,30,0
+expense,Pet Care,80,40,0
+expense,Savings / Emergency Fund,500,0,200
