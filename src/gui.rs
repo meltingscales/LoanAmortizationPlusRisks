@@ -602,6 +602,29 @@ impl LoanCalcGui {
         }
     }
 
+    fn export_budget_csv(&self) {
+        let path = rfd::FileDialog::new()
+            .add_filter("CSV", &["csv"])
+            .set_file_name("budget.csv")
+            .save_file();
+        let path = match path {
+            Some(p) => p,
+            None => return,
+        };
+        let mut csv = String::from("type,note,costPerMonth,jitterPlus,jitterMinus\n");
+        for item in &self.budget_items {
+            let type_str = match item.item_type {
+                ItemType::Income  => "income",
+                ItemType::Expense => "expense",
+            };
+            csv.push_str(&format!(
+                "{},{},{},{},{}\n",
+                type_str, item.note, item.cost_per_month, item.jitter_plus, item.jitter_minus
+            ));
+        }
+        std::fs::write(&path, csv).ok();
+    }
+
     fn render_budget_window(&mut self, ctx: &egui::Context) {
         use egui::DragValue;
 
@@ -691,6 +714,9 @@ impl LoanCalcGui {
                     }
                     if ui.button("📂 Import CSV").clicked() {
                         self.import_budget_csv();
+                    }
+                    if ui.button("💾 Export CSV").clicked() {
+                        self.export_budget_csv();
                     }
                     if ui.button("🗑 Clear All").clicked() {
                         self.budget_items.clear();
