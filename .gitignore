@@ -6,3 +6,4 @@ loan_gui_*.csv
 *.xlsx
 *~
 .~lock.*
+*.csv
