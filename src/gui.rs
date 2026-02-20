@@ -780,7 +780,16 @@ impl LoanCalcGui {
                         ui.label(format!("${:.0}", net_opt));
                         ui.end_row();
 
-                        ui.label("After PITI:");
+                        ui.label("After PITI:").on_hover_text(
+                                "PITI = Principal + Interest + Taxes + Insurance\n\n\
+                                This is your total monthly housing payment:\n\
+                                • Principal & Interest: loan repayment\n\
+                                • Taxes: property tax (monthly escrow)\n\
+                                • Insurance: homeowner's insurance (monthly escrow)\n\n\
+                                'After PITI' is your net income minus all budget \
+                                expenses and the full PITI payment — your remaining \
+                                monthly cash flow.",
+                            );
                         ui.label(egui::RichText::new(format!("${:.0}", after_pes)).color(surplus_color(after_pes)));
                         ui.label(egui::RichText::new(format!("${:.0}", after_base)).color(surplus_color(after_base)));
                         ui.label(egui::RichText::new(format!("${:.0}", after_opt)).color(surplus_color(after_opt)));
