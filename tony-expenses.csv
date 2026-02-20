@@ -1,0 +1,20 @@
+type,note,costPerMonth,jitterPlus,jitterMinus
+income,Monthly Income from Work,5100,300,300
+expense,Apartment Rent (Including Utilities),1700,50,0
+expense,Wow Internet,35,0,0
+expense,Game of Fitness Unlimited Monthly Class,150,0,0
+expense,Game of Fitness Sauna,25,0,0
+expense,Game of Fitness Personal Training,450,0,150
+expense,Planet Fitness Membership,26.80,0,0
+expense,Netflix Subscription Standard,17.99,5,0
+expense,Spotify Premium,12.99,0,0
+expense,YouTube Premium,13.99,0,0
+expense,Regal Unlimited,22.99,0,0
+expense,HBO Max Subscription,2.99,0,0
+expense,Peacock Subscription,10.99,0,0
+expense,Groceries,450,100,50
+expense,NTT Meals Subscription,277.36,0,0
+expense,Gas,70,30,20
+expense,Homeaglow Cleaner,160,0,40
+expense,Takeout Meals,100,75,50
+expense,Other Miscellaneous Entertainment,200,100,75

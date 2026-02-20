@@ -138,8 +138,6 @@ struct LoanParams {
     interest_rate: f32,
     loan_term_years: u32,
     appreciation_rate: f32,
-    chart_width: u32,
-    chart_height: u32,
     font_size: u32,
     // Additional monthly costs
     property_tax_rate: f32,
@@ -163,8 +161,6 @@ impl Default for LoanParams {
             interest_rate: 6.5,
             loan_term_years: 30,
             appreciation_rate: 3.0,
-            chart_width: 800,
-            chart_height: 600,
             font_size: 20,
             property_tax_rate: 1.1,
             insurance_rate: 1.5,
@@ -189,6 +185,7 @@ struct LoanCalcGui {
     scenario_names: Vec<String>,
     selected_tab: String,
     regenerate_chart: bool,
+    last_chart_size: egui::Vec2,
     show_amort_table: bool,
     stacked_chart: bool,
     budget_items: Vec<IncomeExpenseItem>,
@@ -212,6 +209,7 @@ impl LoanCalcGui {
             ],
             selected_tab: "Base Case".to_string(),
             regenerate_chart: true,
+            last_chart_size: egui::Vec2::ZERO,
             show_amort_table: false,
             stacked_chart: false,
             budget_items: vec![],
@@ -304,15 +302,13 @@ impl LoanCalcGui {
         }
     }
 
-    fn generate_chart_for_tab(&mut self, ctx: &egui::Context, name: &str) {
+    fn generate_chart_for_tab(&mut self, ctx: &egui::Context, name: &str, chart_width: u32, chart_height: u32) {
         // Clone the schedule so we don't hold a borrow on self.scenarios
         let schedule = match self.scenarios.get(name).cloned() {
             Some(s) => s,
             None => return,
         };
 
-        let chart_width = self.params.chart_width;
-        let chart_height = self.params.chart_height;
         let caption_font_size = self.params.font_size;
         let label_font_size = (self.params.font_size as f32 * 0.75) as u32;
         let stacked = self.stacked_chart;
@@ -915,29 +911,6 @@ impl eframe::App for LoanCalcGui {
                         ui.separator();
                         ui.add_space(10.0);
 
-                        // Chart Size
-                        ui.label("Chart Size:");
-
-                        ui.horizontal(|ui: &mut egui::Ui| {
-                            ui.label("W:");
-                            if ui.add(egui::Slider::new(&mut self.params.chart_width, 800..=4000)
-                                .step_by(100.0)
-                                .suffix(" px")
-                                .show_value(true)
-                            ).changed() {
-                                self.regenerate_chart = true;
-                            }
-
-                            ui.label("H:");
-                            if ui.add(egui::Slider::new(&mut self.params.chart_height, 600..=3000)
-                                .step_by(100.0)
-                                .suffix(" px")
-                                .show_value(true)
-                            ).changed() {
-                                self.regenerate_chart = true;
-                            }
-                        });
-
                         // Font Size
                         ui.label("Font Size:");
                         if ui.add(egui::Slider::new(&mut self.params.font_size, 12..=48)
@@ -1482,7 +1455,7 @@ impl eframe::App for LoanCalcGui {
             self.render_budget_window(ctx);
         }
 
-        // Chart panel — CentralPanel fills all remaining space, giving ScrollArea full height
+        // Chart panel — CentralPanel fills all remaining space
         egui::CentralPanel::default().show(ctx, |ui| {
             // Tab bar — one tab per active scenario
             ui.horizontal(|ui: &mut egui::Ui| {
@@ -1497,18 +1470,26 @@ impl eframe::App for LoanCalcGui {
             });
             ui.separator();
 
+            // Measure the space remaining after the tab bar + separator
+            let avail = ui.available_size();
+            let ppp = ctx.pixels_per_point();
+            let chart_w = ((avail.x * ppp).round() as u32).max(1);
+            let chart_h = ((avail.y * ppp).round() as u32).max(1);
+
+            // If the panel was resized, invalidate all cached textures
+            if avail != self.last_chart_size {
+                self.chart_textures.clear();
+                self.last_chart_size = avail;
+            }
+
             // Generate chart for the selected tab if not cached yet
             if !self.chart_textures.contains_key(&self.selected_tab) {
                 let tab = self.selected_tab.clone();
-                self.generate_chart_for_tab(ctx, &tab);
+                self.generate_chart_for_tab(ctx, &tab, chart_w, chart_h);
             }
 
             if let Some(texture) = self.chart_textures.get(&self.selected_tab) {
-                egui::ScrollArea::both()
-                    .auto_shrink([false; 2])
-                    .show(ui, |ui| {
-                        ui.image((texture.id(), texture.size_vec2()));
-                    });
+                ui.image((texture.id(), avail));
             } else {
                 ui.label("Generating chart...");
             }

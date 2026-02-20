@@ -2,7 +2,7 @@
 *.png
 output_summary.txt
 loan_data.json
-*.csv
+loan_gui_*.csv
 *.xlsx
 *~
 .~lock.*
