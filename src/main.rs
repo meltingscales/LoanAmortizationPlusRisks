@@ -269,7 +269,7 @@ fn export_csv(schedule: &AmortizationSchedule, config: &Config, scenario_name: &
         let equity = schedule.equity[i];
         let home_value = schedule.home_value[i];
 
-        let bank_share = if equity + total > 0.0 {
+        let bank_share = if equity + interest > 0.0 {
             (interest / (equity + interest)) * 100.0
         } else {
             0.0
@@ -332,6 +332,7 @@ fn generate_chart(config: &Config, scenarios: &HashMap<String, AmortizationSched
             0.0
         };
 
+        let y_min = schedule.equity.iter().cloned().fold(0.0_f64, f64::min).min(0.0);
         let max_value = final_equity.max(final_bank);
         let y_max = (max_value * 1.1).ceil() as f64;
 
@@ -350,7 +351,7 @@ fn generate_chart(config: &Config, scenarios: &HashMap<String, AmortizationSched
             .caption(&title, ("sans-serif", 28).into_font().with_color(&text_color))
             .x_label_area_size(40)
             .y_label_area_size(70)
-            .build_cartesian_2d(0f64..30f64, 0f64..y_max)?;
+            .build_cartesian_2d(0f64..config.loan.loan_term_years as f64, y_min..y_max)?;
 
         chart.configure_mesh()
             .x_desc("Years")
@@ -440,7 +441,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Print summary
     println!("\n═══════════════════════════════════════════════");
-    println!("SCENARIO COMPARISON (30-Year Projection)");
+    println!("SCENARIO COMPARISON ({}-Year Projection)", config.loan.loan_term_years);
     println!("═══════════════════════════════════════════════");
 
     let mut sorted_data: Vec<_> = scenarios.iter().collect();

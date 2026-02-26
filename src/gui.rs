@@ -182,7 +182,6 @@ struct LoanCalcGui {
     chart_textures: HashMap<String, egui::TextureHandle>,
     scenarios: HashMap<String, AmortizationSchedule>,
     show_scenarios: [bool; 6],
-    scenario_names: Vec<String>,
     selected_tab: String,
     regenerate_chart: bool,
     last_chart_size: egui::Vec2,
@@ -199,14 +198,6 @@ impl LoanCalcGui {
             chart_textures: HashMap::new(),
             scenarios: HashMap::new(),
             show_scenarios: [true, true, true, true, true, true],
-            scenario_names: vec![
-                "Base Case".to_string(),
-                "High Rate".to_string(),
-                "Low Down".to_string(),
-                "Extra Principal".to_string(),
-                "With Disasters".to_string(),
-                "Bi-weekly".to_string(),
-            ],
             selected_tab: "Base Case".to_string(),
             regenerate_chart: true,
             last_chart_size: egui::Vec2::ZERO,
@@ -231,7 +222,7 @@ impl LoanCalcGui {
         // Base case
         if self.show_scenarios[0] {
             self.scenarios.insert(
-                self.scenario_names[0].clone(),
+                "Base Case".to_string(),
                 base_calc.calculate_schedule(0.0),
             );
         }
@@ -320,6 +311,7 @@ impl LoanCalcGui {
         let insurance_rate = self.params.insurance_rate as f64;
         let pmi_rate = self.params.pmi_rate as f64;
         let monthly_hoa = self.params.monthly_hoa as f64;
+        let loan_term = self.params.loan_term_years as f64;
 
         let equity_color = RGBColor(46, 204, 113);
         let bank_color = RGBColor(231, 76, 60);
@@ -345,14 +337,18 @@ impl LoanCalcGui {
             })
             .collect();
 
+        // Minimum equity value — can be negative in disaster/low-down scenarios
+        let y_min = schedule.equity.iter().cloned().fold(0.0_f64, f64::min).min(0.0);
+
         // Mode-dependent title and y_max
         let (title, y_max) = if stacked {
             let final_hv = schedule.home_value.last().copied().unwrap_or(0.0);
             let final_equity = schedule.equity.last().copied().unwrap_or(0.0);
             let equity_pct = if final_hv > 0.0 { final_equity / final_hv * 100.0 } else { 0.0 };
             let t = format!(
-                "{}\nOwnership: {:.1}% yours at year 30\nHome: ${} | Down: {}% | Rate: {}%",
+                "{}\nOwnership: {:.1}% yours at year {}\nHome: ${} | Down: {}% | Rate: {}%",
                 name, equity_pct,
+                self.params.loan_term_years,
                 self.params.home_price as u64,
                 self.params.down_payment_percent,
                 self.params.interest_rate
@@ -388,7 +384,7 @@ impl LoanCalcGui {
                 .caption(&title, ("sans-serif", caption_font_size).into_font().with_color(&text_color))
                 .x_label_area_size(50)
                 .y_label_area_size(80)
-                .build_cartesian_2d(0f64..30f64, 0f64..y_max).unwrap();
+                .build_cartesian_2d(0f64..loan_term, y_min..y_max).unwrap();
 
             chart.configure_mesh()
                 .x_desc("Years")
@@ -497,7 +493,7 @@ impl LoanCalcGui {
                 let equity = schedule.equity[i];
                 let home_value = schedule.home_value[i];
 
-                let bank_share = if equity + total > 0.0 {
+                let bank_share = if equity + interest > 0.0 {
                     (interest / (equity + interest)) * 100.0
                 } else {
                     0.0
@@ -1186,12 +1182,14 @@ impl eframe::App for LoanCalcGui {
                             let mut rent        = self.params.monthly_rent as f64;
                             let mut break_even  = None::<f64>;
                             let mut prev_equity = down;
+                            let mut portfolio   = cash_to_close; // renter's compounding investment
 
                             for i in 0..schedule.months.len() {
-                                let equity_gain     = schedule.equity[i] - prev_equity;
-                                prev_equity         = schedule.equity[i];
-                                // Opportunity cost: renter invests the cash-to-close and grows it
-                                let opp_cost        = cash_to_close * mo_stock;
+                                let equity_gain = schedule.equity[i] - prev_equity;
+                                prev_equity     = schedule.equity[i];
+                                // Opportunity cost: renter's portfolio compounds each month
+                                let opp_cost    = portfolio * mo_stock;
+                                portfolio      += opp_cost;
                                 // Monthly net advantage of buying vs renting
                                 cum_net += equity_gain + rent - piti - opp_cost;
                                 if break_even.is_none() && cum_net >= 0.0 {
@@ -1212,9 +1210,10 @@ impl eframe::App for LoanCalcGui {
                             let final_buying_paid = piti * schedule.months.len() as f64;
                             let final_equity = schedule.equity.last().copied().unwrap_or(0.0);
 
-                            ui.label(format!("30yr rent paid:    ${:.0}", final_rent_paid));
-                            ui.label(format!("30yr PITI paid:    ${:.0}", final_buying_paid));
-                            ui.label(format!("30yr equity built: ${:.0}", final_equity));
+                            let term_yrs = self.params.loan_term_years;
+                            ui.label(format!("{}yr rent paid:    ${:.0}", term_yrs, final_rent_paid));
+                            ui.label(format!("{}yr PITI paid:    ${:.0}", term_yrs, final_buying_paid));
+                            ui.label(format!("{}yr equity built: ${:.0}", term_yrs, final_equity));
 
                             ui.add_space(4.0);
                             match break_even {
@@ -1232,7 +1231,7 @@ impl eframe::App for LoanCalcGui {
                                 }
                                 None => {
                                     ui.label(egui::RichText::new(
-                                        "No break-even within 30 years"
+                                        &format!("No break-even within {} years", self.params.loan_term_years)
                                     ).strong().color(egui::Color32::from_rgb(231, 76, 60)));
                                 }
                             }
@@ -1243,7 +1242,7 @@ impl eframe::App for LoanCalcGui {
                                 egui::Color32::from_rgb(231, 76, 60)
                             };
                             ui.label(egui::RichText::new(
-                                format!("30yr net buying advantage: ${:.0}", cum_net)
+                                format!("{}yr net buying advantage: ${:.0}", self.params.loan_term_years, cum_net)
                             ).color(net_color));
                         } else {
                             ui.label("Enable at least one scenario to see analysis.");
@@ -1284,8 +1283,9 @@ impl eframe::App for LoanCalcGui {
                                 let bank = base.interest_paid.last().copied().unwrap_or(0.0) / 1000.0;
                                 let share = if equity + bank > 0.0 { bank / (equity + bank) * 100.0 } else { 0.0 };
 
-                                ui.label(format!("30yr Equity: ${:.0}K", equity));
-                                ui.label(format!("30yr Bank:   ${:.0}K  ({:.1}%)", bank, share));
+                                let term = self.params.loan_term_years;
+                                ui.label(format!("{}yr Equity: ${:.0}K", term, equity));
+                                ui.label(format!("{}yr Bank:   ${:.0}K  ({:.1}%)", term, bank, share));
 
                                 ui.add_space(6.0);
                                 ui.label(egui::RichText::new("Monthly Breakdown (Base):").strong());
