@@ -9,19 +9,9 @@ use plotters::prelude::*;
 use std::collections::HashMap;
 use itertools::Itertools;
 
-/// Amortization schedule data
-#[derive(Debug, Clone)]
-struct AmortizationSchedule {
-    years: Vec<f64>,
-    months: Vec<u32>,
-    balance: Vec<f64>,
-    equity: Vec<f64>,
-    principal_paid: Vec<f64>,
-    interest_paid: Vec<f64>,
-    total_paid: Vec<f64>,
-    home_value: Vec<f64>,
-    monthly_payment: f64,
-}
+#[path = "loancalc.rs"]
+mod loancalc;
+use loancalc::{AmortizationSchedule, LoanCalculator};
 
 #[derive(Debug, Clone, PartialEq)]
 enum ItemType { Income, Expense }
@@ -33,101 +23,6 @@ struct IncomeExpenseItem {
     cost_per_month: f64,
     jitter_plus: f64,
     jitter_minus: f64,
-}
-
-/// Loan calculator
-struct LoanCalculator {
-    home_price: f64,
-    down_payment: f64,
-    loan_amount: f64,
-    interest_rate: f64,
-    loan_term_years: u32,
-    appreciation_rate: f64,
-}
-
-impl LoanCalculator {
-    fn new(
-        home_price: f64,
-        down_payment_percent: f64,
-        interest_rate: f64,
-        loan_term_years: u32,
-        appreciation_rate: f64,
-    ) -> Self {
-        let down_payment = home_price * down_payment_percent / 100.0;
-        let loan_amount = home_price - down_payment;
-
-        Self {
-            home_price,
-            down_payment,
-            loan_amount,
-            interest_rate: interest_rate / 100.0,
-            loan_term_years,
-            appreciation_rate: appreciation_rate / 100.0,
-        }
-    }
-
-    fn calculate_schedule(&self, extra_monthly: f64) -> AmortizationSchedule {
-        let monthly_rate = self.interest_rate / 12.0;
-        let num_payments = self.loan_term_years as usize * 12;
-
-        let base_monthly_payment = if monthly_rate > 0.0 {
-            self.loan_amount * (monthly_rate * (1.0 + monthly_rate).powi(num_payments as i32))
-                / ((1.0 + monthly_rate).powi(num_payments as i32) - 1.0)
-        } else {
-            self.loan_amount / num_payments as f64
-        };
-        let monthly_payment = base_monthly_payment + extra_monthly;
-
-        let mut balance = self.loan_amount;
-        let mut home_value = self.home_price;
-        let mut cumulative_principal = self.down_payment;
-        let mut cumulative_interest = 0.0;
-
-        let mut years = Vec::with_capacity(num_payments);
-        let mut months = Vec::with_capacity(num_payments);
-        let mut balances = Vec::with_capacity(num_payments);
-        let mut equity = Vec::with_capacity(num_payments);
-        let mut principal_paid = Vec::with_capacity(num_payments);
-        let mut interest_paid = Vec::with_capacity(num_payments);
-        let mut total_paid = Vec::with_capacity(num_payments);
-        let mut home_values = Vec::with_capacity(num_payments);
-
-        for month in 1..=num_payments {
-            let interest_payment = balance * monthly_rate;
-            let principal_payment = (monthly_payment - interest_payment).min(balance);
-
-            balance -= principal_payment;
-            cumulative_principal += principal_payment;
-            cumulative_interest += interest_payment;
-
-            if month % 12 == 0 {
-                home_value *= 1.0 + self.appreciation_rate;
-            }
-
-            let current_equity = cumulative_principal + (home_value - self.home_price);
-
-            years.push(month as f64 / 12.0);
-            months.push(month as u32);
-            balances.push(balance);
-            equity.push(current_equity);
-            principal_paid.push(cumulative_principal);
-            interest_paid.push(cumulative_interest);
-            total_paid.push(cumulative_principal + cumulative_interest);
-            home_values.push(home_value);
-        }
-
-        AmortizationSchedule {
-            years,
-            months,
-            balance: balances,
-            equity,
-            principal_paid,
-            interest_paid,
-            total_paid,
-            home_value: home_values,
-            monthly_payment,
-        }
-    }
 }
 
 /// Loan parameters state for the GUI
@@ -1158,16 +1053,7 @@ impl eframe::App for LoanCalcGui {
                         let closing = loan * self.params.closing_cost_percent as f64 / 100.0;
                         let cash_to_close = down + closing;
 
-                        let mo_pi  = self.scenarios.get("Base Case")
-                            .or_else(|| self.scenarios.values().next())
-                            .map(|s| s.monthly_payment).unwrap_or(0.0);
-                        let mo_tax = hp * self.params.property_tax_rate as f64 / 100.0 / 12.0;
-                        let mo_ins = hp * self.params.insurance_rate as f64 / 100.0 / 12.0;
-                        let mo_pmi = if dp_pct < 20.0 {
-                            loan * self.params.pmi_rate as f64 / 100.0 / 12.0
-                        } else { 0.0 };
-                        let mo_hoa   = self.params.monthly_hoa as f64;
-                        let piti     = mo_pi + mo_tax + mo_ins + mo_pmi + mo_hoa;
+                        let piti = self.monthly_piti();
 
                         let mo_stock = self.params.stock_return as f64 / 100.0 / 12.0;
                         let mo_rent_inflate = (1.0 + self.params.rent_inflation as f64 / 100.0)
