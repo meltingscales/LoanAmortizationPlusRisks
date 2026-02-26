@@ -16,11 +16,11 @@ pub struct AmortizationSchedule {
 
 /// Loan calculator
 pub struct LoanCalculator {
-    pub home_price: f64,
+    home_price: f64,
     down_payment: f64,
     loan_amount: f64,
     interest_rate: f64,
-    pub loan_term_years: u32,
+    loan_term_years: u32,
     appreciation_rate: f64,
 }
 
@@ -52,8 +52,8 @@ impl LoanCalculator {
 
         // Calculate monthly payment
         let base_monthly_payment = if monthly_rate > 0.0 {
-            self.loan_amount * (monthly_rate * (1.0 + monthly_rate).powi(num_payments as i32))
-                / ((1.0 + monthly_rate).powi(num_payments as i32) - 1.0)
+            let growth = (1.0 + monthly_rate).powi(num_payments as i32);
+            self.loan_amount * (monthly_rate * growth) / (growth - 1.0)
         } else {
             self.loan_amount / num_payments as f64
         };
